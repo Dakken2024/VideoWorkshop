@@ -1,0 +1,11 @@
+# Video Creator GUI 项目依赖
+# 第三方库依赖（需要单独安装）
+moviepy>=2.0.0.dev1
+edge-tts>=6.1.9
+requests>=2.28.0
+Pillow>=9.0.0
+pypinyin>=0.44.0  # 用于中文标题转拼音
+pydub
+audioop-lts
+pillow
+opencv-python
