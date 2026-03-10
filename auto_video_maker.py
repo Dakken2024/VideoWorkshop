@@ -13,6 +13,7 @@ import random
 import time
 import re
 import hashlib
+import subprocess
 from pathlib import Path
 from pydub import AudioSegment
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
@@ -431,10 +432,10 @@ class ImageGenerator:
         # 更新后的API配置（使用gen端点和API密钥）
         api_configs = [
             {
-                'name': 'Gen Pollinations (推荐)',
+                'name': 'Gen Pollinations (turbo)',
                 'base_url': 'https://gen.pollinations.ai/image/',
                 'params': {
-                    'model': 'zimage',
+                    'model': 'turbo',
                     'width': '1080',
                     'height': '1920',
                     'enhance': 'false',
@@ -442,13 +443,41 @@ class ImageGenerator:
                 },
                 'supports_commands': True,
                 'timeout': 60,
-                'success_weight': 0.6
+                'success_weight': 0.4
             },
             {
-                'name': 'Pollinations Standard (备选)',
+                'name': 'Gen Pollinations (flux)',
                 'base_url': 'https://gen.pollinations.ai/image/',
                 'params': {
-                    'model': 'zimage',
+                    'model': 'flux',
+                    'width': '1080',
+                    'height': '1920',
+                    'enhance': 'false',
+                    'key': 'pk_WyzA9ElvE2wF2Nqu'
+                },
+                'supports_commands': True,
+                'timeout': 60,
+                'success_weight': 0.35
+            },
+            {
+                'name': 'Gen Pollinations (flux-realism)',
+                'base_url': 'https://gen.pollinations.ai/image/',
+                'params': {
+                    'model': 'flux-realism',
+                    'width': '1080',
+                    'height': '1920',
+                    'enhance': 'false',
+                    'key': 'pk_WyzA9ElvE2wF2Nqu'
+                },
+                'supports_commands': True,
+                'timeout': 60,
+                'success_weight': 0.3
+            },
+            {
+                'name': 'Gen Pollinations (sdxl)',
+                'base_url': 'https://gen.pollinations.ai/image/',
+                'params': {
+                    'model': 'sdxl',
                     'width': '1080',
                     'height': '1920',
                     'enhance': 'false',
@@ -462,7 +491,21 @@ class ImageGenerator:
                 'name': 'Alternative Pollinations',
                 'url_template': 'https://pollinations.ai/p/{prompt}?width=1080&height=1920&seed={seed}',
                 'timeout': 45,
-                'success_weight': 0.15
+                'success_weight': 0.2
+            },
+            {
+                'name': 'Gen Pollinations (zimage)',
+                'base_url': 'https://gen.pollinations.ai/image/',
+                'params': {
+                    'model': 'zimage',
+                    'width': '1080',
+                    'height': '1920',
+                    'enhance': 'false',
+                    'key': 'pk_WyzA9ElvE2wF2Nqu'
+                },
+                'supports_commands': True,
+                'timeout': 60,
+                'success_weight': 0.1
             }
         ]
         
@@ -546,7 +589,12 @@ class ImageGenerator:
                 content = response.content
                 content_size = len(content)
                 
-                # 保存图片（移除质量验证）
+                # 验证返回内容是否为有效图片
+                if not self._is_valid_image(content, content_size):
+                    log('DEBUG', f'{api_config["name"]} 返回内容不是有效图片')
+                    return False
+                
+                # 保存图片
                 with open(output_file, 'wb') as f:
                     f.write(content)
                 log('SUCCESS', f'{api_config["name"]} 生成成功: {content_size} bytes')
@@ -562,6 +610,35 @@ class ImageGenerator:
             log('DEBUG', f'{api_config["name"]} 异常: {str(e)[:100]}')
         
         return False
+    
+    def _is_valid_image(self, content: bytes, size: int) -> bool:
+        """验证内容是否为有效的图片格式"""
+        # 最小大小检查（至少10KB，排除错误页面）
+        if size < 10240:
+            return False
+        
+        # 文件头验证
+        valid_headers = [
+            b'\xff\xd8',      # JPEG
+            b'\x89PNG',       # PNG
+            b'RIFF'           # WebP开始
+        ]
+        
+        # 检查是否以有效的图片头开始
+        header_valid = any(content.startswith(header) for header in valid_headers)
+        
+        # 特殊检查WebP格式
+        if not header_valid and content.startswith(b'RIFF') and len(content) > 12 and content[8:12] == b'WEBP':
+            header_valid = True
+        
+        if not header_valid:
+            return False
+        
+        # 检查是否是HTML错误页面（以<!DOCTYPE或<html开头）
+        if content.startswith(b'<!DOCTYPE') or content.startswith(b'<html'):
+            return False
+        
+        return True
     
     def _validate_ultimate_quality(self, content: bytes, size: int) -> bool:
         """终极质量验证"""
@@ -1129,10 +1206,131 @@ class ImageGenerator:
 # ================= 视频合成器 =================
 
 class VideoCompositor:
-    """视频合成器（无字幕功能 - 字幕将在剪映中后期添加）"""
+    """视频合成器（无字幕功能 - 字幕将在剪映中后期添加）
     
-    def __init__(self, output_dir):
+    支持智能码率控制，根据场景复杂度自动优化编码参数
+    支持GPU硬件加速（NVIDIA NVENC）
+    """
+    
+    def __init__(self, output_dir, use_gpu=None):
+        """初始化视频合成器
+        
+        Args:
+            output_dir: 输出目录
+            use_gpu: 是否使用GPU加速，None表示自动检测
+        """
         self.output_dir = output_dir
+        self.encoding_report = {}
+        self.gpu_available = False
+        self.gpu_encoder = None
+        
+        # GPU检测
+        if use_gpu is None:
+            self.gpu_available, self.gpu_encoder = self._detect_gpu()
+        elif use_gpu:
+            self.gpu_available, self.gpu_encoder = self._detect_gpu()
+            if not self.gpu_available:
+                log('WARNING', 'GPU加速已启用但未检测到可用GPU，将使用CPU编码')
+        else:
+            self.gpu_available = False
+        
+        if self.gpu_available:
+            log('INFO', f'✅ GPU硬件加速已启用: {self.gpu_encoder}')
+        else:
+            log('INFO', '使用CPU编码（libx264）')
+    
+    def _detect_gpu(self):
+        """检测可用的GPU编码器
+        
+        Returns:
+            tuple: (是否可用, 编码器名称)
+        """
+        gpu_encoders = [
+            ('h264_nvenc', 'NVIDIA NVENC'),
+            ('h264_qsv', 'Intel Quick Sync'),
+            ('h264_videotoolbox', 'Apple VideoToolbox'),
+            ('h264_amf', 'AMD AMF')
+        ]
+        
+        for encoder, name in gpu_encoders:
+            try:
+                result = subprocess.run(
+                    ['ffmpeg', '-hide_banner', '-encoders'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if encoder in result.stdout:
+                    log('DEBUG', f'检测到GPU编码器: {name} ({encoder})')
+                    return True, encoder
+            except Exception as e:
+                log('DEBUG', f'检测GPU编码器 {encoder} 失败: {str(e)[:50]}')
+                continue
+        
+        return False, None
+    
+    def _analyze_scene_complexity(self, scenes):
+        """分析场景复杂度以确定最佳编码参数"""
+        if not scenes:
+            return {'complexity': 'medium', 'recommended_crf': 23, 'recommended_preset': 'slow'}
+        
+        complexity_score = 0
+        motion_score = 0
+        
+        complex_keywords = [
+            'detailed', 'intricate', 'busy', 'crowd', 'multiple', 'complex', 
+            'texture', 'pattern', 'ornate', 'elaborate', 'rich', 'layered'
+        ]
+        simple_keywords = [
+            'minimal', 'simple', 'clean', 'solid', 'gradient', 'blur', 
+            'plain', 'smooth', 'uniform', 'single', 'basic'
+        ]
+        motion_keywords = [
+            'action', 'movement', 'dynamic', 'fast', 'motion', 'running',
+            'flying', 'falling', 'explosion', 'battle', 'chase'
+        ]
+        
+        for scene in scenes:
+            prompt = scene.get('prompt', '').lower()
+            text = scene.get('text', '').lower()
+            combined = prompt + ' ' + text
+            
+            for kw in complex_keywords:
+                if kw in combined:
+                    complexity_score += 1
+            
+            for kw in simple_keywords:
+                if kw in combined:
+                    complexity_score -= 1
+            
+            for kw in motion_keywords:
+                if kw in combined:
+                    motion_score += 1
+        
+        avg_complexity = complexity_score / len(scenes)
+        avg_motion = motion_score / len(scenes)
+        
+        combined_score = avg_complexity + avg_motion * 0.5
+        
+        if combined_score > 1.5:
+            complexity = 'high'
+            crf = 21
+            preset = 'slow'
+        elif combined_score < -0.5:
+            complexity = 'low'
+            crf = 25
+            preset = 'medium'
+        else:
+            complexity = 'medium'
+            crf = 23
+            preset = 'slow'
+        
+        return {
+            'complexity': complexity,
+            'recommended_crf': crf,
+            'recommended_preset': preset,
+            'complexity_score': round(avg_complexity, 2),
+            'motion_score': round(avg_motion, 2),
+            'scene_count': len(scenes)
+        }
     
     def create(self, audio_file, image_files, scene_durations, output_file, scenes=None):
         """合成视频（无字幕 - 字幕将在剪映中后期添加）
@@ -1142,9 +1340,14 @@ class VideoCompositor:
             image_files: 图片文件路径列表
             scene_durations: 场景持续时间列表
             output_file: 输出视频文件路径
-            scenes: 场景信息列表（不再用于字幕生成）
+            scenes: 场景信息列表（用于智能编码优化）
         """
         log('INFO', '开始合成视频（无字幕 - 请在剪映中添加字幕）...')
+        
+        # 分析场景复杂度
+        complexity_analysis = self._analyze_scene_complexity(scenes) if scenes else {}
+        log('INFO', f"场景复杂度分析: {complexity_analysis.get('complexity', 'medium')}")
+        log('DEBUG', f"推荐CRF: {complexity_analysis.get('recommended_crf', 23)}, Preset: {complexity_analysis.get('recommended_preset', 'slow')}")
         
         # 标准化路径并检查音频文件
         audio_path = os.path.normpath(audio_file)
@@ -1246,30 +1449,348 @@ class VideoCompositor:
                 final_video = CompositeVideoClip([final_video, watermark_clip])
                 log('SUCCESS', '水印添加成功')
             else:
-                log('WARNING', '无法添加水印，所有字体都不可用')
+                log('INFO', '跳过水印（无可用字体）')
                 
         except Exception as e:
             log('WARNING', f'水印添加失败：{e}')
         
         final_video = final_video.with_audio(audio)
         
-        final_video.write_videofile(
-            output_file,
-            fps=24,
-            codec='libx264',
-            audio_codec='aac',
-            bitrate='5000k',
-            preset='medium',
-            logger=None
-        )
+        # 微信视频号优化配置 - 使用智能码率控制
+        log('INFO', '应用微信视频号优化配置（智能码率控制）...')
+        
+        # 根据场景复杂度确定编码参数
+        crf = complexity_analysis.get('recommended_crf', 23)
+        preset = complexity_analysis.get('recommended_preset', 'slow')
+        complexity = complexity_analysis.get('complexity', 'medium')
+        
+        # 根据GPU可用性选择编码器和参数
+        if self.gpu_available and self.gpu_encoder:
+            # GPU编码配置
+            log('INFO', f'使用GPU编码: {self.gpu_encoder}')
+            log('INFO', f'智能编码参数: CQ={crf}, 复杂度={complexity}')
+            
+            # NVENC使用不同的preset和参数
+            if self.gpu_encoder == 'h264_nvenc':
+                # NVIDIA NVENC preset映射
+                nvenc_preset_map = {
+                    'slow': 'p6',      # 最慢但质量最好
+                    'medium': 'p4',    # 平衡
+                    'fast': 'p1'       # 最快
+                }
+                nvenc_preset = nvenc_preset_map.get(preset, 'p4')
+                
+                final_video.write_videofile(
+                    output_file,
+                    fps=30,
+                    codec=self.gpu_encoder,
+                    audio_codec='aac',
+                    ffmpeg_params=[
+                        '-preset', nvenc_preset,
+                        '-rc:v', 'vbr',
+                        '-cq:v', str(crf),
+                        '-b:v', '0',
+                        '-profile:v', 'high',
+                        '-level', '4.1',
+                        '-pix_fmt', 'yuv420p',
+                        '-movflags', '+faststart',
+                    ],
+                    audio_bitrate='128k',
+                    logger=None
+                )
+            else:
+                # 其他GPU编码器（QSV, VideoToolbox, AMF）
+                final_video.write_videofile(
+                    output_file,
+                    fps=30,
+                    codec=self.gpu_encoder,
+                    audio_codec='aac',
+                    ffmpeg_params=[
+                        '-profile:v', 'high',
+                        '-level', '4.1',
+                        '-pix_fmt', 'yuv420p',
+                        '-movflags', '+faststart',
+                    ],
+                    audio_bitrate='128k',
+                    logger=None
+                )
+        else:
+            # CPU编码配置
+            log('INFO', f'使用CPU编码: libx264')
+            log('INFO', f'智能编码参数: CRF={crf}, Preset={preset}, 复杂度={complexity}')
+            
+            final_video.write_videofile(
+                output_file,
+                fps=30,
+                codec='libx264',
+                audio_codec='aac',
+                preset=preset,
+                ffmpeg_params=[
+                    '-crf', str(crf),
+                    '-profile:v', 'high',
+                    '-level', '4.1',
+                    '-pix_fmt', 'yuv420p',
+                    '-movflags', '+faststart',
+                    '-threads', '0',
+                ],
+                audio_bitrate='128k',
+                logger=None
+            )
         
         audio.close()
         for clip in video_clips:
             clip.close()
         
+        # 获取优化后的文件大小
+        file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+        
+        # 生成编码报告
+        actual_codec = self.gpu_encoder if self.gpu_available else 'libx264'
+        self.encoding_report = {
+            'output_file': output_file,
+            'file_size_mb': round(file_size_mb, 2),
+            'duration_sec': round(total_audio_duration, 2),
+            'scene_count': len(image_files),
+            'encoding_settings': {
+                'fps': 30,
+                'codec': actual_codec,
+                'profile': 'high',
+                'level': '4.1',
+                'crf': crf,
+                'preset': preset,
+                'audio_bitrate': '128k',
+                'faststart': True,
+                'gpu_accelerated': self.gpu_available,
+                'gpu_encoder': self.gpu_encoder if self.gpu_available else None
+            },
+            'complexity_analysis': complexity_analysis,
+            'wechat_optimized': True
+        }
+        
         log('SUCCESS', f'视频合成完成：{output_file}')
+        log('INFO', f'文件大小：{file_size_mb:.1f}MB')
+        
+        if self.gpu_available:
+            log('INFO', f'编码方式：GPU加速 ({self.gpu_encoder})')
+            log('INFO', f'智能优化：CQ={crf} | 复杂度={complexity}')
+        else:
+            log('INFO', f'编码方式：CPU (libx264)')
+            log('INFO', f'智能优化：CRF={crf} | Preset={preset} | 复杂度={complexity}')
+        
+        log('INFO', '优化特性：智能码率控制 | 30fps | FastStart | H.264 High Profile')
         log('INFO', '提示：请在剪映中导入视频并添加字幕')
+        
+        # 验证微信视频号兼容性
+        compatibility = self._validate_wechat_compatibility(output_file)
+        if compatibility['is_compatible']:
+            log('SUCCESS', '✅ 微信视频号兼容性验证通过')
+        else:
+            log('WARNING', '⚠️ 微信视频号兼容性警告:')
+            for issue in compatibility.get('issues', []):
+                log('WARNING', f'  - {issue}')
+        
+        self.encoding_report['wechat_compatibility'] = compatibility
         return True
+    
+    def _validate_wechat_compatibility(self, video_path):
+        """验证视频是否符合微信视频号要求"""
+        issues = []
+        warnings = []
+        
+        try:
+            # 检查文件是否存在
+            if not os.path.exists(video_path):
+                return {'is_compatible': False, 'issues': ['视频文件不存在']}
+            
+            # 获取文件大小
+            file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            
+            # 检查文件大小限制 (微信视频号最大1GB)
+            if file_size_mb > 1000:
+                issues.append(f'文件过大 ({file_size_mb:.1f}MB > 1000MB)')
+            elif file_size_mb > 500:
+                warnings.append(f'文件较大 ({file_size_mb:.1f}MB)，建议控制在500MB以内')
+            
+            # 使用ffprobe检查视频信息
+            import subprocess
+            import json as json_module
+            
+            try:
+                result = subprocess.run([
+                    'ffprobe', '-v', 'quiet',
+                    '-print_format', 'json',
+                    '-show_format', '-show_streams',
+                    video_path
+                ], capture_output=True, text=True, encoding='utf-8', timeout=30)
+                
+                if result.returncode == 0:
+                    info = json_module.loads(result.stdout)
+                    
+                    # 检查视频流
+                    video_stream = next(
+                        (s for s in info.get('streams', []) if s.get('codec_type') == 'video'),
+                        None
+                    )
+                    
+                    if video_stream:
+                        # 检查编码格式
+                        codec = video_stream.get('codec_name', '')
+                        if codec != 'h264':
+                            issues.append(f'视频编码不是H.264 (当前: {codec})')
+                        
+                        # 检查分辨率
+                        width = int(video_stream.get('width', 0))
+                        height = int(video_stream.get('height', 0))
+                        
+                        if not ((width == 1080 and height == 1920) or (width == 1920 and height == 1080)):
+                            if width != 1080 or height != 1920:
+                                warnings.append(f'分辨率非推荐 (当前: {width}x{height}，推荐: 1080x1920)')
+                        
+                        # 检查帧率
+                        fps_str = video_stream.get('r_frame_rate', '0/1')
+                        try:
+                            if '/' in fps_str:
+                                num, den = map(int, fps_str.split('/'))
+                                fps = num / den if den != 0 else 0
+                            else:
+                                fps = float(fps_str)
+                            
+                            if fps < 24:
+                                warnings.append(f'帧率较低 ({fps:.1f}fps)，建议至少24fps')
+                            elif fps > 60:
+                                warnings.append(f'帧率过高 ({fps:.1f}fps)，微信视频号最高支持60fps')
+                        except:
+                            pass
+                        
+                        # 检查Profile
+                        profile = video_stream.get('profile', '')
+                        if profile and profile not in ['High', 'Main', 'Baseline']:
+                            warnings.append(f'H.264 Profile可能不兼容 (当前: {profile})')
+                    
+                    # 检查音频流
+                    audio_stream = next(
+                        (s for s in info.get('streams', []) if s.get('codec_type') == 'audio'),
+                        None
+                    )
+                    
+                    if audio_stream:
+                        audio_codec = audio_stream.get('codec_name', '')
+                        if audio_codec != 'aac':
+                            issues.append(f'音频编码不是AAC (当前: {audio_codec})')
+                    
+                    # 检查码率
+                    bitrate = int(info.get('format', {}).get('bit_rate', 0)) / 1000
+                    if bitrate > 10000:
+                        issues.append(f'码率过高 ({bitrate:.0f}kbps > 10000kbps)')
+                    elif bitrate > 6000:
+                        warnings.append(f'码率较高 ({bitrate:.0f}kbps)，建议控制在6000kbps以内')
+                    
+                    # 检查时长
+                    duration = float(info.get('format', {}).get('duration', 0))
+                    if duration > 3600:
+                        issues.append(f'视频过长 ({duration:.0f}秒 > 3600秒)')
+                    
+            except subprocess.TimeoutExpired:
+                warnings.append('视频信息获取超时，跳过详细检查')
+            except FileNotFoundError:
+                warnings.append('ffprobe不可用，跳过详细检查')
+            except Exception as e:
+                warnings.append(f'视频信息获取失败: {str(e)[:50]}')
+            
+        except Exception as e:
+            issues.append(f'验证过程出错: {str(e)[:50]}')
+        
+        return {
+            'is_compatible': len(issues) == 0,
+            'issues': issues,
+            'warnings': warnings,
+            'file_size_mb': round(file_size_mb, 2) if 'file_size_mb' in dir() else 0
+        }
+    
+    def save_encoding_report(self, output_path=None):
+        """保存编码报告到JSON文件
+        
+        Args:
+            output_path: 报告保存路径，默认保存在视频同目录下
+            
+        Returns:
+            str: 报告文件路径
+        """
+        if not self.encoding_report:
+            log('WARNING', '没有编码报告可保存')
+            return None
+        
+        if output_path is None:
+            video_path = self.encoding_report.get('output_file', '')
+            if video_path:
+                output_path = video_path.replace('.mp4', '_encoding_report.json')
+            else:
+                output_path = os.path.join(self.output_dir, 'encoding_report.json')
+        
+        try:
+            # 添加报告生成时间
+            self.encoding_report['generated_at'] = datetime.now().isoformat()
+            self.encoding_report['optimizer_version'] = '2.0'
+            self.encoding_report['platform_target'] = '微信视频号'
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(self.encoding_report, f, ensure_ascii=False, indent=2)
+            
+            log('SUCCESS', f'编码报告已保存: {output_path}')
+            return output_path
+            
+        except Exception as e:
+            log('ERROR', f'保存编码报告失败: {str(e)}')
+            return None
+    
+    def get_encoding_summary(self):
+        """获取编码摘要信息
+        
+        Returns:
+            str: 编码摘要文本
+        """
+        if not self.encoding_report:
+            return "无编码报告"
+        
+        report = self.encoding_report
+        lines = [
+            "=" * 50,
+            "视频编码报告",
+            "=" * 50,
+            f"输出文件: {report.get('output_file', 'N/A')}",
+            f"文件大小: {report.get('file_size_mb', 0):.2f} MB",
+            f"视频时长: {report.get('duration_sec', 0):.2f} 秒",
+            f"场景数量: {report.get('scene_count', 0)}",
+            "",
+            "编码设置:",
+            f"  - 编码器: {report.get('encoding_settings', {}).get('codec', 'N/A')}",
+            f"  - CRF: {report.get('encoding_settings', {}).get('crf', 'N/A')}",
+            f"  - Preset: {report.get('encoding_settings', {}).get('preset', 'N/A')}",
+            f"  - 帧率: {report.get('encoding_settings', {}).get('fps', 'N/A')} fps",
+            f"  - 音频码率: {report.get('encoding_settings', {}).get('audio_bitrate', 'N/A')}",
+            "",
+            "复杂度分析:",
+            f"  - 级别: {report.get('complexity_analysis', {}).get('complexity', 'N/A')}",
+            f"  - 复杂度分数: {report.get('complexity_analysis', {}).get('complexity_score', 'N/A')}",
+            f"  - 运动分数: {report.get('complexity_analysis', {}).get('motion_score', 'N/A')}",
+            "",
+            "微信视频号兼容性:",
+        ]
+        
+        compatibility = report.get('wechat_compatibility', {})
+        if compatibility.get('is_compatible'):
+            lines.append("  ✅ 完全兼容")
+        else:
+            lines.append("  ⚠️ 存在问题:")
+            for issue in compatibility.get('issues', []):
+                lines.append(f"    - {issue}")
+        
+        for warning in compatibility.get('warnings', []):
+            lines.append(f"  💡 {warning}")
+        
+        lines.append("=" * 50)
+        
+        return "\n".join(lines)
 
 # ================= 主程序 =================
 
