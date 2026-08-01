@@ -104,7 +104,7 @@ class ImageConfig:
     min_interval: float = 3.0
     max_interval: float = 15.0
     max_retries: int = 3
-    api_key: str = os.environ.get("POLLINATIONS_API_KEY", "pk_WyzA9ElvE2wF2Nqu")
+    api_key: str = os.environ.get("POLLINATIONS_API_KEY", "")
 
 
 # ==================== AI 大模型配置 ====================
@@ -114,7 +114,7 @@ class AIConfig:
     """AI 大模型配置"""
     enabled: bool = False
     provider: str = "deepseek"
-    api_key: str = os.environ.get("AI_API_KEY", "sk-f6a5d3e3eef74b9f9ed1734774d53206")
+    api_key: str = os.environ.get("AI_API_KEY", "")
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-v4-flash"
     temperature: float = 0.7
