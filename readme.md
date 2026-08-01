@@ -38,7 +38,7 @@ Video Workshop 是一款开源的智能视频自动生成工具，能够将文�
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/yourusername/VideoWorkshop.git
+git clone https://github.com/Dakken2024/VideoWorkshop.git
 cd VideoWorkshop
 
 # 2. 安装依赖
@@ -46,7 +46,8 @@ pip install -r requirements.txt
 
 # 3. 配置 API Key（可选）
 # 复制配置模板并填写你的 API Key
-cp video_gen/.env.example .env
+# Windows: copy video_gen\.env.example .env
+# Linux/macOS: cp video_gen/.env.example .env
 ```
 
 ### 启动 GUI
@@ -175,13 +176,8 @@ VideoWorkshop/
 │   ├── config.py               # 集中配置管理
 │   ├── cli.py                  # 命令行入口
 │   ├── workflow.py             # 精简工作流
-│   └── gui_launcher.py         # GUI 启动器
-├── legacy/                     # 遗留代码（原 v1 版本）
-├── scripts/                    # 调试和测试脚本
-├── reports/                    # 技术分析报告
-├── articles/                   # 示例文章
-├── docs/                       # 技术文档
-│   └── plans/                  # 设计文档
+│   ├── gui_launcher.py         # GUI 启动器
+│   └── .env.example            # 环境变量配置模板
 ├── readme.md                   # 本文件
 ├── CHANGELOG.md                # 更新日志
 ├── CONTRIBUTING.md             # 贡献指南
@@ -189,6 +185,7 @@ VideoWorkshop/
 ├── LICENSE                     # 开源许可证
 ├── requirements.txt            # 依赖清单
 ├── run_gui.bat                 # Windows 启动脚本
+├── start_gui.bat               # 启动脚本
 └── setup_ffmpeg.bat            # FFmpeg 安装脚本
 ```
 
@@ -242,8 +239,8 @@ VideoWorkshop/
 
 ## 联系方式
 
-- GitHub Issues: [提交问题](https://github.com/yourusername/VideoWorkshop/issues)
-- 项目主页: [Video Workshop](https://github.com/yourusername/VideoWorkshop)
+- GitHub Issues: [提交问题](https://github.com/Dakken2024/VideoWorkshop/issues)
+- 项目主页: [Video Workshop](https://github.com/Dakken2024/VideoWorkshop)
 
 ---
 
