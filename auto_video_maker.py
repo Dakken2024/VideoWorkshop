@@ -355,31 +355,36 @@ class ImageGenerator:
             'cinematic masterpiece, dramatic composition, high definition'
         ]
     
-    def generate(self, prompt, output_file, scene_id=None, scene_note=None):
+    def generate(self, prompt, output_file, scene_id=None, scene_note=None, seed=None):
         """终极图片生成方法 - 四重保障策略
-        
+
         Args:
             prompt: 基础提示词
             output_file: 输出文件路径
             scene_id: 场景ID
             scene_note: 场景说明
+            seed: 随机种子（可选，用于帧间一致性）
         """
         log('INFO', f'场景 {scene_id}: 开始终极多样性生成')
-        
-        # 策略1: 超强提示词工程
-        engineered_prompt = self._ultimate_prompt_engineering(prompt, scene_id, scene_note)
+
+        # 策略1: 提示词工程（如果未提供seed则使用完整增强，否则使用简化版）
+        if seed is not None:
+            # 使用传入的seed，简化提示词以避免URL过长
+            engineered_prompt = self._simple_prompt_engineering(prompt, scene_id)
+        else:
+            engineered_prompt = self._ultimate_prompt_engineering(prompt, scene_id, scene_note)
         log('DEBUG', f'工程化提示词长度: {len(engineered_prompt)} 字符')
-        
-        # 策略2: 智能多API轮询
-        if self._intelligent_multi_api_generation(engineered_prompt, output_file, scene_id):
+
+        # 策略2: 智能多API轮询（传入seed）
+        if self._intelligent_multi_api_generation(engineered_prompt, output_file, scene_id, seed):
             log('SUCCESS', f'场景 {scene_id}: API生成成功')
             return True
-        
+
         # 策略3: 本地智能合成
         if self._local_smart_synthesis(scene_id, scene_note, output_file):
             log('SUCCESS', f'场景 {scene_id}: 本地合成成功')
             return True
-        
+
         # 策略4: 高级占位图
         self._create_ultimate_placeholder(scene_id, scene_note, output_file)
         log('WARNING', f'场景 {scene_id}: 使用高级占位图')
@@ -424,27 +429,30 @@ class ImageGenerator:
         enhanced = f"{enhanced}, {creative_booster}"
         
         return enhanced
-    
-    def _intelligent_multi_api_generation(self, prompt: str, output_file: str, scene_id: int) -> bool:
+
+    def _simple_prompt_engineering(self, base_prompt: str, scene_id: int) -> str:
+        """简化版提示词工程 - 用于帧生成，避免URL过长"""
+        enhanced = base_prompt.strip()
+
+        # 只添加最基本的电影效果描述
+        cinematic_enhancements = [
+            'cinematic composition',
+            '35mm film look',
+            'professional photography'
+        ]
+
+        # 随机选择1-2个增强描述
+        selected = random.sample(cinematic_enhancements, min(2, len(cinematic_enhancements)))
+        enhanced = f"{enhanced}, {', '.join(selected)}"
+
+        return enhanced
+
+    def _intelligent_multi_api_generation(self, prompt: str, output_file: str, scene_id: int, seed: int = None) -> bool:
         """智能多API生成"""
         log('DEBUG', f'启动智能多API轮询，场景 {scene_id}')
-        
+
         # 更新后的API配置（使用gen端点和API密钥）
         api_configs = [
-            {
-                'name': 'Gen Pollinations (turbo)',
-                'base_url': 'https://gen.pollinations.ai/image/',
-                'params': {
-                    'model': 'turbo',
-                    'width': '1080',
-                    'height': '1920',
-                    'enhance': 'false',
-                    'key': 'pk_WyzA9ElvE2wF2Nqu'
-                },
-                'supports_commands': True,
-                'timeout': 60,
-                'success_weight': 0.4
-            },
             {
                 'name': 'Gen Pollinations (flux)',
                 'base_url': 'https://gen.pollinations.ai/image/',
@@ -457,13 +465,27 @@ class ImageGenerator:
                 },
                 'supports_commands': True,
                 'timeout': 60,
-                'success_weight': 0.35
+                'success_weight': 0.4
             },
             {
                 'name': 'Gen Pollinations (flux-realism)',
                 'base_url': 'https://gen.pollinations.ai/image/',
                 'params': {
                     'model': 'flux-realism',
+                    'width': '1080',
+                    'height': '1920',
+                    'enhance': 'false',
+                    'key': 'pk_WyzA9ElvE2wF2Nqu'
+                },
+                'supports_commands': True,
+                'timeout': 60,
+                'success_weight': 0.35
+            },
+            {
+                'name': 'Gen Pollinations (turbo)',
+                'base_url': 'https://gen.pollinations.ai/image/',
+                'params': {
+                    'model': 'turbo',
                     'width': '1080',
                     'height': '1920',
                     'enhance': 'false',
@@ -492,29 +514,19 @@ class ImageGenerator:
                 'url_template': 'https://pollinations.ai/p/{prompt}?width=1080&height=1920&seed={seed}',
                 'timeout': 45,
                 'success_weight': 0.2
-            },
-            {
-                'name': 'Gen Pollinations (zimage)',
-                'base_url': 'https://gen.pollinations.ai/image/',
-                'params': {
-                    'model': 'zimage',
-                    'width': '1080',
-                    'height': '1920',
-                    'enhance': 'false',
-                    'key': 'pk_WyzA9ElvE2wF2Nqu'
-                },
-                'supports_commands': True,
-                'timeout': 60,
-                'success_weight': 0.1
             }
         ]
-        
-        # 为每个API生成唯一种子
+
+        # 为每个API生成种子（如果传入了seed则使用该seed，否则生成新的）
         api_seeds = {}
         for i, config in enumerate(api_configs):
-            seed = self._generate_ultimate_seed(prompt, scene_id, i)
-            api_seeds[config['name']] = seed
-            log('DEBUG', f'  {config["name"]} 种子: {seed}')
+            if seed is not None:
+                # 使用传入的seed，但为不同API添加偏移以增加多样性
+                api_seed = seed + i * 100
+            else:
+                api_seed = self._generate_ultimate_seed(prompt, scene_id, i)
+            api_seeds[config['name']] = api_seed
+            log('DEBUG', f'  {config["name"]} 种子: {api_seed}')
         
         # 按权重排序并尝试
         sorted_apis = sorted(api_configs, key=lambda x: x['success_weight'], reverse=True)

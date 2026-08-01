@@ -111,6 +111,8 @@ class VideoCreatorGUI:
         self.current_title = ""
         self.current_scripts = {}
         self.output_dir = "./output"
+        self.current_aspect_ratio = (9, 16)  # 默认竖屏
+        self.cinematic_mode = False  # 默认标准模式
         
         # 任务状态跟踪
         self.task_indicators = {}
@@ -118,6 +120,9 @@ class VideoCreatorGUI:
         # 图片生成状态跟踪 - 记录已生成的图片
         self.image_generation_status = {}  # 格式: {(project_name, scene_index): True/False}
         self._load_image_generation_status()
+        
+        # 批量生成图片的同步锁
+        self.batch_generation_running = False
         
         # 创建界面
         self.create_widgets()
@@ -224,7 +229,10 @@ class VideoCreatorGUI:
         
         ttk.Button(image_btn_frame, text="本地选择图片", command=self.upload_image).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(image_btn_frame, text="重新生成图片", command=self.regenerate_image).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(image_btn_frame, text="批量生成所有图片", command=self.batch_generate_images).pack(side=tk.LEFT)
+        ttk.Button(image_btn_frame, text="批量生成所有图片", command=self.batch_generate_images).pack(side=tk.LEFT, padx=(0, 10))
+        # 逐帧生成按钮 - 支持新的 JSON 格式
+        ttk.Button(image_btn_frame, text="🎬 逐帧生成图片序列",
+                  command=self.frame_based_generation, style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 10))
         
     def create_generate_tab(self):
         """视频生成标签页"""
@@ -253,7 +261,25 @@ class VideoCreatorGUI:
         ttk.Checkbutton(options_frame, text="生成音频", variable=self.generate_audio_var).pack(side=tk.LEFT, padx=(0, 20))
         
         self.generate_video_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(options_frame, text="生成视频", variable=self.generate_video_var).pack(side=tk.LEFT)
+        ttk.Checkbutton(options_frame, text="生成视频", variable=self.generate_video_var).pack(side=tk.LEFT, padx=(0, 20))
+        
+        # 视频比例选择
+        ttk.Label(options_frame, text="视频比例:").pack(side=tk.LEFT, padx=(20, 5))
+        self.aspect_ratio_var = tk.StringVar(value="9:16")
+        aspect_ratio_combo = ttk.Combobox(options_frame, textvariable=self.aspect_ratio_var, 
+                                          values=["9:16 (竖屏)", "16:9 (横屏)"], 
+                                          width=12, state="readonly")
+        aspect_ratio_combo.pack(side=tk.LEFT, padx=(0, 20))
+        aspect_ratio_combo.bind("<<ComboboxSelected>>", self.on_aspect_ratio_changed)
+        
+        # 电影效果模式选择
+        ttk.Label(options_frame, text="视频模式:").pack(side=tk.LEFT, padx=(0, 5))
+        self.video_mode_var = tk.StringVar(value="标准")
+        video_mode_combo = ttk.Combobox(options_frame, textvariable=self.video_mode_var, 
+                                        values=["标准", "电影效果 (推荐)"], 
+                                        width=15, state="readonly")
+        video_mode_combo.pack(side=tk.LEFT)
+        video_mode_combo.bind("<<ComboboxSelected>>", self.on_video_mode_changed)
         
         # 生成按钮
         generate_btn_frame = ttk.Frame(generate_frame)
@@ -967,7 +993,7 @@ class VideoCreatorGUI:
         # 不显示弹窗，实现无缝导入体验
                 
     def batch_generate_images(self, force_regenerate=False):
-        """异步批量生成所有图片
+        """同步批量生成所有图片 - 按脚本编号顺序遍历执行
         
         Args:
             force_regenerate: 是否强制重新生成（忽略已生成状态）
@@ -978,6 +1004,11 @@ class VideoCreatorGUI:
             
         if not self.current_title:
             messagebox.showwarning("警告", "请先设置视频标题")
+            return
+        
+        # 检查是否已经在运行
+        if self.batch_generation_running:
+            messagebox.showwarning("警告", "批量生成正在进行中，请等待完成")
             return
         
         # 获取项目名称
@@ -1002,84 +1033,105 @@ class VideoCreatorGUI:
             self.append_log("✅ 所有场景图片都已生成，无需重复生成\n")
             messagebox.showinfo("提示", "所有图片已生成，如需重新生成请使用'重新生成图片'按钮")
             return
-            
-        self.append_log(f"开始异步批量生成 {len(scenes_to_generate)} 个场景的图片...\n")
         
-        # 禁用生成按钮
-        self.generate_btn.configure(state='disabled')
-        self.progress_label.configure(text="正在异步生成图片...")
+        # 设置运行标志
+        self.batch_generation_running = True
         
-        # 提交异步任务
-        task_id = self.async_manager.submit_task(
-            self._batch_generate_worker,
-            scenes_to_generate,
-            output_name,
-            callback=self._on_batch_generation_complete
-        )
-        
-        self.append_log(f"任务已提交，ID: {task_id}\n")
-        
-    async def _batch_generate_worker(self, scenes_to_generate, project_name):
-        """优化的异步批量生成工作者 - 带频率控制和状态跟踪
+        # 开始同步批量生成
+        self._batch_generate_sync(scenes_to_generate, output_name)
+    
+    def _batch_generate_sync(self, scenes_to_generate, project_name):
+        """同步批量生成图片 - 按顺序执行
         
         Args:
             scenes_to_generate: 需要生成的场景列表 [(index, scene), ...]
             project_name: 项目名称（用于状态跟踪）
         """
-        results = []
-        total = len(scenes_to_generate)
+        import threading
+        import time
         
-        # 使用指数退避策略
-        base_delay = 2.0  # 基础延迟2秒
-        max_delay = 10.0  # 最大延迟10秒
-        consecutive_failures = 0
-        
-        for batch_i, (scene_index, scene) in enumerate(scenes_to_generate):
-            # 更新进度
-            progress = (batch_i + 1) / total * 100
-            self.update_ui_safely(self._update_generation_progress, batch_i+1, total, progress)
-            
-            # 计算当前延迟时间
-            current_delay = min(base_delay * (2 ** consecutive_failures), max_delay)
-            if consecutive_failures > 0:
-                self.update_ui_safely(self.append_log, f"⚠️ 检测到连续失败，增加延迟到 {current_delay:.1f} 秒\n")
-            
-            # 异步生成单个图片
+        def generate_worker():
+            """在后台线程中执行生成任务"""
             try:
-                result = await self.async_manager.async_task_wrapper(
-                    self.generate_single_image,
-                    scene_index, 
-                    scene.get('prompt', ''),
-                    scene_id=scene.get('scene_id'),
-                    scene_note=scene.get('note', '')
-                )
-                results.append((scene_index, result, True))
-                # 标记为已生成
-                self._mark_image_generated(project_name, scene_index, success=True)
-                consecutive_failures = 0  # 重置失败计数
-                self.update_ui_safely(self.append_log, f"✅ 场景 {scene_index+1} 生成成功\n")
+                results = []
+                total = len(scenes_to_generate)
+                
+                self.append_log(f"\n{'='*60}\n")
+                self.append_log(f"🚀 开始批量生成 {total} 个场景的图片\n")
+                self.append_log(f"{'='*60}\n\n")
+                
+                # 基础延迟配置
+                base_delay = 2.0  # 基础延迟2秒
+                max_delay = 10.0  # 最大延迟10秒
+                consecutive_failures = 0
+                
+                for batch_i, (scene_index, scene) in enumerate(scenes_to_generate):
+                    current_num = batch_i + 1
+                    
+                    # 更新进度
+                    progress = (current_num / total) * 100
+                    self.update_ui_safely(self._update_generation_progress, current_num, total, progress)
+                    
+                    # 记录开始生成
+                    self.update_ui_safely(self.append_log, f"\n[{current_num}/{total}] 开始生成场景 {scene_index+1}...\n")
+                    
+                    # 计算当前延迟时间
+                    current_delay = min(base_delay * (2 ** consecutive_failures), max_delay)
+                    if consecutive_failures > 0:
+                        self.update_ui_safely(self.append_log, f"⚠️ 检测到连续失败，增加延迟到 {current_delay:.1f} 秒\n")
+                    
+                    # 同步生成单个图片
+                    try:
+                        start_time = time.time()
+                        
+                        # 调用图片生成函数
+                        result = self.generate_single_image(
+                            scene_index, 
+                            scene.get('prompt', ''),
+                            scene_id=scene.get('scene_id'),
+                            scene_note=scene.get('note', '')
+                        )
+                        
+                        elapsed_time = time.time() - start_time
+                        
+                        if result and os.path.exists(result):
+                            results.append((scene_index, result, True))
+                            # 标记为已生成
+                            self._mark_image_generated(project_name, scene_index, success=True)
+                            consecutive_failures = 0  # 重置失败计数
+                            self.update_ui_safely(self.append_log, f"✅ 场景 {scene_index+1} 生成成功 ({elapsed_time:.1f}s)\n")
+                            self.update_ui_safely(self.append_log, f"   文件: {result}\n")
+                        else:
+                            raise Exception("生成结果无效")
+                        
+                    except Exception as e:
+                        results.append((scene_index, str(e), False))
+                        # 标记为生成失败
+                        self._mark_image_generated(project_name, scene_index, success=False)
+                        consecutive_failures += 1
+                        self.update_ui_safely(self.append_log, f"❌ 场景 {scene_index+1} 生成失败: {str(e)}\n")
+                    
+                    # 场景间延迟 - 避免API频率限制
+                    if batch_i < total - 1:  # 最后一个场景不需要延迟
+                        self.update_ui_safely(self.append_log, f"⏳ 等待 {current_delay:.1f} 秒后继续...\n")
+                        time.sleep(current_delay)
+                
+                # 生成完成
+                self.update_ui_safely(self._on_batch_generation_complete_sync, results)
                 
             except Exception as e:
-                results.append((scene_index, str(e), False))
-                # 标记为生成失败
-                self._mark_image_generated(project_name, scene_index, success=False)
-                consecutive_failures += 1
-                self.update_ui_safely(self.append_log, f"❌ 场景 {scene_index+1} 生成失败: {str(e)}\n")
-                
-            # 场景间延迟 - 避免API频率限制
-            if batch_i < total - 1:  # 最后一个场景不需要延迟
-                await asyncio.sleep(current_delay)
-                
-        return results
+                self.update_ui_safely(self.append_log, f"\n❌ 批量生成过程出错: {str(e)}\n")
+                self.update_ui_safely(self._on_batch_generation_complete_sync, [], error=str(e))
         
-    def _update_generation_progress(self, current, total, percentage):
-        """更新生成进度"""
-        self.progress_var.set(percentage)
-        self.progress_label.configure(text=f"生成进度: {current}/{total} ({percentage:.1f}%)")
-        self.status_label.configure(text=f"正在生成场景 {current}/{total}")
+        # 启动后台线程
+        thread = threading.Thread(target=generate_worker, daemon=True)
+        thread.start()
+    
+    def _on_batch_generation_complete_sync(self, results, error=None):
+        """批量生成完成回调（同步版本）"""
+        # 重置运行标志
+        self.batch_generation_running = False
         
-    def _on_batch_generation_complete(self, results, error=None):
-        """批量生成完成回调"""
         # 重新启用生成按钮
         self.generate_btn.configure(state='normal')
         self.progress_var.set(0)
@@ -1088,18 +1140,26 @@ class VideoCreatorGUI:
         if error:
             self.handle_async_error(f"批量生成失败: {error}")
             return
-            
+        
         # 统计结果
         success_count = sum(1 for _, _, success in results if success)
         total_count = len(results)
         
+        self.append_log(f"\n{'='*60}\n")
         self.append_log(f"✅ 批量生成完成: {success_count}/{total_count} 成功\n")
+        self.append_log(f"{'='*60}\n\n")
         self.progress_label.configure(text=f"生成完成: {success_count}/{total_count}")
         
         if success_count == total_count:
             messagebox.showinfo("完成", f"所有 {total_count} 个图片生成成功！")
         else:
             messagebox.showwarning("完成", f"生成完成: {success_count}/{total_count} 成功")
+    
+    def _update_generation_progress(self, current, total, percentage):
+        """更新生成进度"""
+        self.progress_var.set(percentage)
+        self.progress_label.configure(text=f"生成进度: {current}/{total} ({percentage:.1f}%)")
+        self.status_label.configure(text=f"正在生成场景 {current}/{total}")
         
     def generate_single_image(self, index, prompt, force_regenerate=False, scene_id=None, scene_note=None):
         """异步生成单个图片 - 调用真实的AI图片生成API
@@ -1178,7 +1238,801 @@ class VideoCreatorGUI:
             placeholder.save(image_path, 'JPEG', quality=95)
         except Exception as e:
             self.append_log(f"占位图创建失败: {str(e)}\n")
+    
+    def batch_generate_cinematic_frames(self, force_regenerate=False):
+        """电影效果批量生成 - 为每个场景生成多帧略有变化的图片（方案A）
+        
+        这是文档中推荐方案A的实现：
+        - 每场景生成3帧略有变化的图片
+        - 使用不同的提示词变化模拟摄像机运动
+        - 为后续24fps电影效果视频做准备
+        """
+        if not self.current_scripts or 'scenes' not in self.current_scripts:
+            messagebox.showwarning("警告", "请先加载有效的脚本文件")
+            return
             
+        if not self.current_title:
+            messagebox.showwarning("警告", "请先设置视频标题")
+            return
+        
+        # 检查是否已经在运行
+        if self.batch_generation_running:
+            messagebox.showwarning("警告", "批量生成正在进行中，请等待完成")
+            return
+        
+        # 获取项目名称
+        output_name = self.convert_title_to_filename(self.current_title)
+        scenes = self.current_scripts['scenes']
+        
+        # 设置运行标志
+        self.batch_generation_running = True
+        
+        # 开始同步批量生成
+        self._batch_generate_cinematic_sync(scenes, output_name)
+    
+    def _batch_generate_cinematic_sync(self, scenes, project_name):
+        """同步批量生成电影效果帧 - 按顺序执行
+        
+        Args:
+            scenes: 场景列表
+            project_name: 项目名称
+        """
+        import threading
+        import time
+        
+        def generate_cinematic_worker():
+            """在后台线程中执行电影效果帧生成任务"""
+            try:
+                # 帧变化配置（与文档一致）
+                variations = [
+                    "slight zoom in, subtle camera movement",
+                    "slight pan left, smooth motion blur",
+                    "slight pan right, cinematic motion",
+                    "subtle lighting change, atmospheric",
+                    "slight focus shift, depth of field"
+                ]
+                
+                frames_per_scene = 3  # 方案A：每场景3帧
+                total_frames = len(scenes) * frames_per_scene
+                generated_count = 0
+                
+                self.append_log(f"\n{'='*60}\n")
+                self.append_log(f"🎬 开始电影效果批量生成\n")
+                self.append_log(f"   场景数: {len(scenes)}\n")
+                self.append_log(f"   每场景帧数: {frames_per_scene}\n")
+                self.append_log(f"   总帧数: {total_frames}\n")
+                self.append_log(f"   帧率: 24 fps (电影标准)\n")
+                self.append_log(f"{'='*60}\n\n")
+                
+                # 基础延迟配置
+                base_delay = 2.0
+                max_delay = 10.0
+                consecutive_failures = 0
+                
+                for scene_index, scene in enumerate(scenes):
+                    scene_id = scene.get('scene_id', scene_index + 1)
+                    base_prompt = scene.get('prompt', '')
+                    
+                    self.append_log(f"\n[场景 {scene_id}/{len(scenes)}] 开始生成 {frames_per_scene} 帧...\n")
+                    
+                    # 为当前场景生成多帧
+                    for frame_i in range(frames_per_scene):
+                        generated_count += 1
+                        progress = (generated_count / total_frames) * 100
+                        self.update_ui_safely(self._update_generation_progress, generated_count, total_frames, progress)
+                        
+                        # 构建带变化的提示词
+                        variation = variations[frame_i % len(variations)]
+                        varied_prompt = f"{base_prompt}, {variation}, frame {frame_i+1} of {frames_per_scene}, continuous cinematic shot, 35mm film look"
+                        
+                        # 帧文件路径
+                        output_path = os.path.join(self.output_dir, datetime.now().strftime("%Y%m"), project_name)
+                        os.makedirs(output_path, exist_ok=True)
+                        frame_path = os.path.join(output_path, f"scene_{scene_index:03d}_frame_{frame_i:03d}.jpg")
+                        
+                        self.update_ui_safely(self.append_log, f"  生成帧 {frame_i+1}/{frames_per_scene}: {variation[:30]}...\n")
+                        
+                        try:
+                            start_time = time.time()
+                            
+                            # 调用图片生成
+                            from auto_video_maker import ImageGenerator
+                            image_generator = ImageGenerator()
+                            
+                            success = image_generator.generate(
+                                varied_prompt,
+                                frame_path,
+                                scene_id=scene_id,
+                                scene_note=scene.get('note', '')
+                            )
+                            
+                            elapsed_time = time.time() - start_time
+                            
+                            if success and os.path.exists(frame_path):
+                                consecutive_failures = 0
+                                self.update_ui_safely(self.append_log, f"    ✅ 帧 {frame_i+1} 生成成功 ({elapsed_time:.1f}s)\n")
+                            else:
+                                raise Exception("生成失败")
+                            
+                        except Exception as e:
+                            consecutive_failures += 1
+                            self.update_ui_safely(self.append_log, f"    ❌ 帧 {frame_i+1} 生成失败: {str(e)[:50]}\n")
+                            
+                            # 如果已有帧，复制上一帧
+                            prev_frame = os.path.join(output_path, f"scene_{scene_index:03d}_frame_{frame_i-1:03d}.jpg")
+                            if frame_i > 0 and os.path.exists(prev_frame):
+                                import shutil
+                                shutil.copy(prev_frame, frame_path)
+                                self.update_ui_safely(self.append_log, f"    ⚠️ 使用上一帧作为替代\n")
+                        
+                        # 帧间延迟
+                        if frame_i < frames_per_scene - 1:
+                            time.sleep(1.0)
+                    
+                    # 场景间延迟
+                    if scene_index < len(scenes) - 1:
+                        current_delay = min(base_delay * (2 ** consecutive_failures), max_delay)
+                        if consecutive_failures > 0:
+                            self.update_ui_safely(self.append_log, f"⏳ 检测到连续失败，增加延迟到 {current_delay:.1f} 秒\n")
+                        self.update_ui_safely(self.append_log, f"⏳ 等待 {current_delay:.1f} 秒后继续下一个场景...\n")
+                        time.sleep(current_delay)
+                
+                # 生成完成
+                self.update_ui_safely(self._on_cinematic_generation_complete, total_frames, len(scenes))
+                
+            except Exception as e:
+                self.update_ui_safely(self.append_log, f"\n❌ 电影效果生成过程出错: {str(e)}\n")
+                self.update_ui_safely(self._on_cinematic_generation_complete, 0, 0, error=str(e))
+        
+        # 启动后台线程
+        thread = threading.Thread(target=generate_cinematic_worker, daemon=True)
+        thread.start()
+    
+    def _on_cinematic_generation_complete(self, total_frames, scene_count, error=None):
+        """电影效果生成完成回调"""
+        # 重置运行标志
+        self.batch_generation_running = False
+        
+        # 重新启用生成按钮
+        self.generate_btn.configure(state='normal')
+        self.progress_var.set(0)
+        self.status_label.configure(text="就绪")
+        
+        if error:
+            self.handle_async_error(f"电影效果生成失败: {error}")
+            return
+        
+        self.append_log(f"\n{'='*60}\n")
+        self.append_log(f"✅ 电影效果批量生成完成！\n")
+        self.append_log(f"   总帧数: {total_frames}\n")
+        self.append_log(f"   场景数: {scene_count}\n")
+        self.append_log(f"   每场景: 3 帧\n")
+        self.append_log(f"   帧率: 24 fps\n")
+        self.append_log(f"{'='*60}\n\n")
+        self.progress_label.configure(text=f"电影效果生成完成: {total_frames} 帧")
+        
+        messagebox.showinfo(
+            "完成", 
+            f"电影效果图片生成完成！\n\n"
+            f"总帧数: {total_frames}\n"
+            f"场景数: {scene_count}\n"
+            f"每场景: 3 帧\n\n"
+            f"现在可以在视频生成时选择\"电影效果模式\"来生成24fps电影感视频。"
+        )
+    
+    def batch_generate_smart_frames(self):
+        """智能帧序列生成 - 根据脚本内容和音频时长智能规划
+        
+        这是推荐的智能方案：
+        1. 分析脚本内容，识别关键场景
+        2. 根据音频时长智能分配每场景的帧数
+        3. 生成渐进式变化的提示词序列
+        4. 确保视觉连贯性和叙事完整性
+        """
+        if not self.current_scripts or 'scenes' not in self.current_scripts:
+            messagebox.showwarning("警告", "请先加载有效的脚本文件")
+            return
+            
+        if not self.current_title:
+            messagebox.showwarning("警告", "请先设置视频标题")
+            return
+        
+        # 检查是否已经在运行
+        if self.batch_generation_running:
+            messagebox.showwarning("警告", "批量生成正在进行中，请等待完成")
+            return
+        
+        # 获取音频时长（如果存在）
+        output_name = self.convert_title_to_filename(self.current_title)
+        output_path = os.path.join(self.output_dir, datetime.now().strftime("%Y%m"), output_name)
+        
+        audio_file = os.path.join(output_path, "voiceover.mp3")
+        target_duration = 30.0  # 默认30秒
+        
+        if os.path.exists(audio_file):
+            try:
+                from pydub import AudioSegment
+                audio = AudioSegment.from_mp3(audio_file)
+                target_duration = len(audio) / 1000.0
+                self.append_log(f"🎵 检测到音频文件，时长: {target_duration:.1f}秒\n")
+            except Exception as e:
+                self.append_log(f"⚠️ 无法读取音频时长，使用默认值30秒: {e}\n")
+        else:
+            self.append_log(f"⚠️ 未找到音频文件，使用默认时长30秒\n")
+        
+        scenes = self.current_scripts['scenes']
+        
+        # 设置运行标志
+        self.batch_generation_running = True
+        
+        # 开始智能帧序列生成
+        self._batch_generate_smart_sync(scenes, output_name, output_path, target_duration)
+    
+    def _batch_generate_smart_sync(self, scenes, project_name, output_path, target_duration):
+        """同步智能帧序列生成
+        
+        Args:
+            scenes: 场景列表
+            project_name: 项目名称
+            output_path: 输出路径
+            target_duration: 目标视频时长（秒）
+        """
+        import threading
+        
+        def generate_smart_worker():
+            """在后台线程中执行智能帧生成任务"""
+            try:
+                from smart_frame_generator import SmartFrameGenerator, FrameSequenceConfig
+                
+                # 创建配置
+                config = FrameSequenceConfig(
+                    fps=24,
+                    target_duration=target_duration,
+                    min_frames_per_scene=12,  # 每场景最少0.5秒
+                    max_frames_per_scene=72,  # 每场景最多3秒
+                    variation_intensity="medium"
+                )
+                
+                generator = SmartFrameGenerator(config)
+                
+                # 分析脚本
+                self.update_ui_safely(self.append_log, f"\n{'='*60}\n")
+                self.update_ui_safely(self.append_log, f"🧠 开始智能帧序列生成\n")
+                self.update_ui_safely(self.append_log, f"{'='*60}\n\n")
+                
+                analysis = generator.analyze_script(scenes)
+                self.update_ui_safely(self.append_log, f"📊 脚本分析结果:\n")
+                self.update_ui_safely(self.append_log, f"   场景总数: {analysis['total_scenes']}\n")
+                self.update_ui_safely(self.append_log, f"   关键转折点: {len(analysis['key_moments'])} 个\n\n")
+                
+                # 计算帧分配
+                frame_distribution = generator.calculate_frame_distribution(scenes, target_duration)
+                total_frames = sum(frame_distribution)
+                
+                self.update_ui_safely(self.append_log, f"🎯 帧分配计划:\n")
+                self.update_ui_safely(self.append_log, f"   目标时长: {target_duration:.1f}秒\n")
+                self.update_ui_safely(self.append_log, f"   帧率: 24 fps\n")
+                self.update_ui_safely(self.append_log, f"   总帧数: {total_frames}\n")
+                self.update_ui_safely(self.append_log, f"   预计视频时长: {total_frames/24:.1f}秒\n\n")
+                
+                # 显示每场景的帧分配
+                self.update_ui_safely(self.append_log, f"📋 每场景帧分配:\n")
+                for i, frames in enumerate(frame_distribution):
+                    duration = frames / 24.0
+                    self.update_ui_safely(self.append_log, f"   场景 {i+1}: {frames}帧 ({duration:.1f}秒)\n")
+                self.update_ui_safely(self.append_log, f"\n")
+                
+                # 定义图片生成函数
+                def image_generator_func(prompt, frame_path, scene_idx=0):
+                    try:
+                        from auto_video_maker import ImageGenerator
+                        image_generator = ImageGenerator()
+                        # 获取当前场景信息
+                        scene = scenes[scene_idx] if scene_idx < len(scenes) else {}
+                        scene_id = scene.get('scene_id', scene_idx + 1)
+                        scene_note = scene.get('note', '')
+                        return image_generator.generate(prompt, frame_path, scene_id=scene_id, scene_note=scene_note)
+                    except Exception as e:
+                        self.update_ui_safely(self.append_log, f"   生成失败: {str(e)[:50]}\n")
+                        return False
+                
+                # 定义进度回调
+                def progress_callback(step, total, message):
+                    progress = (step / total) * 100
+                    self.update_ui_safely(self.progress_var.set, progress)
+                    self.update_ui_safely(self.progress_label.configure, text=f"{message}")
+                    if step % 10 == 0 or step == total:
+                        self.update_ui_safely(self.append_log, f"  {message}\n")
+                
+                # 生成帧序列
+                all_frame_files = generator.generate_frame_sequence(
+                    scenes,
+                    target_duration,
+                    image_generator_func,
+                    output_path,
+                    progress_callback
+                )
+                
+                # 保存帧计划
+                plan_file = os.path.join(output_path, "frame_plan.json")
+                generator.save_frame_plan(plan_file, scenes, frame_distribution)
+                
+                # 生成完成
+                self.update_ui_safely(self._on_smart_generation_complete, total_frames, len(scenes), target_duration)
+                
+            except Exception as e:
+                import traceback
+                self.update_ui_safely(self.append_log, f"\n❌ 智能帧生成过程出错: {str(e)}\n")
+                self.update_ui_safely(self.append_log, f"详细错误:\n{traceback.format_exc()}\n")
+                self.update_ui_safely(self._on_smart_generation_complete, 0, 0, 0, error=str(e))
+        
+        # 启动后台线程
+        thread = threading.Thread(target=generate_smart_worker, daemon=True)
+        thread.start()
+    
+    def _on_smart_generation_complete(self, total_frames, scene_count, target_duration, error=None):
+        """智能帧生成完成回调"""
+        # 重置运行标志
+        self.batch_generation_running = False
+        
+        # 重新启用生成按钮
+        self.generate_btn.configure(state='normal')
+        self.progress_var.set(0)
+        self.status_label.configure(text="就绪")
+        
+        if error:
+            self.handle_async_error(f"智能帧生成失败: {error}")
+            return
+        
+        actual_duration = total_frames / 24.0
+        
+        self.append_log(f"\n{'='*60}\n")
+        self.append_log(f"✅ 智能帧序列生成完成！\n")
+        self.append_log(f"   总帧数: {total_frames}\n")
+        self.append_log(f"   场景数: {scene_count}\n")
+        self.append_log(f"   目标时长: {target_duration:.1f}秒\n")
+        self.append_log(f"   实际视频时长: {actual_duration:.1f}秒\n")
+        self.append_log(f"   帧率: 24 fps\n")
+        self.append_log(f"{'='*60}\n\n")
+        self.progress_label.configure(text=f"智能帧生成完成: {total_frames} 帧")
+        
+        messagebox.showinfo(
+            "完成",
+            f"智能帧序列生成完成！\n\n"
+            f"总帧数: {total_frames}\n"
+            f"场景数: {scene_count}\n"
+            f"视频时长: {actual_duration:.1f}秒\n"
+            f"帧率: 24 fps\n\n"
+            f"帧分配计划已保存到 frame_plan.json\n\n"
+            f"现在可以在视频生成时选择\"电影效果模式\"来生成视频。"
+        )
+
+    def unified_smart_generation(self):
+        """
+        统一智能图片生成 - 整合电影效果和智能帧序列功能
+
+        一键式处理流程：
+        1. 自动分析脚本和Markdown内容
+        2. 根据内容智能选择生成策略（标准/电影效果/智能帧序列）
+        3. 应用API调用频率限制确保稳定性
+        4. 生成连贯的图片序列
+        """
+        if not self.current_scripts or 'scenes' not in self.current_scripts:
+            messagebox.showwarning("警告", "请先加载有效的脚本文件")
+            return
+
+        if not self.current_title:
+            messagebox.showwarning("警告", "请先设置视频标题")
+            return
+
+        # 检查是否已经在运行
+        if self.batch_generation_running:
+            messagebox.showwarning("警告", "批量生成正在进行中，请等待完成")
+            return
+
+        # 获取输出路径
+        output_name = self.convert_title_to_filename(self.current_title)
+        output_path = os.path.join(self.output_dir, datetime.now().strftime("%Y%m"), output_name)
+        os.makedirs(output_path, exist_ok=True)
+
+        # 尝试读取Markdown内容
+        md_content = ""
+        md_file = f"{self.current_title}.md"
+        if os.path.exists(md_file):
+            try:
+                with open(md_file, 'r', encoding='utf-8') as f:
+                    md_content = f.read()
+                self.append_log(f"📄 已加载Markdown内容: {md_file}\n")
+            except Exception as e:
+                self.append_log(f"⚠️ 无法加载Markdown内容: {e}\n")
+
+        # 获取目标时长
+        target_duration = self._estimate_target_duration(output_path)
+
+        scenes = self.current_scripts['scenes']
+
+        # 设置运行标志
+        self.batch_generation_running = True
+
+        # 开始统一智能生成
+        self._unified_generation_sync(scenes, output_name, output_path, target_duration, md_content)
+
+    def _estimate_target_duration(self, output_path):
+        """估算目标视频时长"""
+        # 首先尝试从音频文件获取
+        audio_file = os.path.join(output_path, "voiceover.mp3")
+        if os.path.exists(audio_file):
+            try:
+                from pydub import AudioSegment
+                audio = AudioSegment.from_mp3(audio_file)
+                duration = len(audio) / 1000.0
+                self.append_log(f"🎵 检测到音频文件，时长: {duration:.1f}秒\n")
+                return duration
+            except Exception as e:
+                self.append_log(f"⚠️ 无法读取音频时长: {e}\n")
+
+        # 否则根据场景预设时长计算
+        if self.current_scripts and 'scenes' in self.current_scripts:
+            total_duration = sum(s.get('duration_sec', 5) for s in self.current_scripts['scenes'])
+            self.append_log(f"📊 根据场景预设计算时长: {total_duration:.1f}秒\n")
+            return total_duration
+
+        return 30.0  # 默认30秒
+
+    def _unified_generation_sync(self, scenes, project_name, output_path, target_duration, md_content):
+        """同步执行统一智能生成
+
+        Args:
+            scenes: 场景列表
+            project_name: 项目名称
+            output_path: 输出路径
+            target_duration: 目标视频时长
+            md_content: Markdown内容
+        """
+        import threading
+
+        def unified_generation_worker():
+            """在后台线程中执行统一生成任务"""
+            try:
+                from unified_image_generator import (
+                    UnifiedImageGenerator, UnifiedGenerationConfig,
+                    GenerationMode, generate_images_unified
+                )
+
+                self.update_ui_safely(self.append_log, f"\n{'='*60}\n")
+                self.update_ui_safely(self.append_log, f"🎬 开始统一智能图片生成\n")
+                self.update_ui_safely(self.append_log, f"{'='*60}\n\n")
+
+                # 创建配置
+                config = UnifiedGenerationConfig(
+                    mode=GenerationMode.UNIFIED,  # 自动选择最佳模式
+                    output_dir=output_path,
+                    target_duration=target_duration,
+                    fps=24,
+                    enable_rate_limiting=True
+                )
+
+                generator = UnifiedImageGenerator(config)
+
+                # 定义图片生成函数（适配新的统一生成器接口）
+                def image_generator_func(prompt, frame_path, scene_idx=0, seed=None):
+                    try:
+                        from auto_video_maker import ImageGenerator
+                        image_generator = ImageGenerator()
+
+                        # 获取当前场景信息
+                        scene = scenes[scene_idx] if scene_idx < len(scenes) else {}
+                        scene_id = scene.get('scene_id', scene_idx + 1)
+                        scene_note = scene.get('note', '')
+
+                        # 调用生成（seed参数在pollinations.ai中通过其他方式传递）
+                        return image_generator.generate(
+                            prompt, frame_path, scene_id=scene_id, scene_note=scene_note
+                        )
+                    except Exception as e:
+                        self.update_ui_safely(self.append_log, f"   生成失败: {str(e)[:50]}\n")
+                        return False
+
+                # 定义进度回调
+                def progress_callback(current, total, message):
+                    self.update_ui_safely(self.progress_var.set, current)
+                    self.update_ui_safely(self.progress_label.configure, text=f"{message} ({current}%)")
+                    if current % 10 == 0 or current == total:
+                        self.update_ui_safely(self.append_log, f"  {message}\n")
+
+                # 执行统一生成
+                frame_files, report = generator.generate_unified_frames(
+                    scenes,
+                    image_generator_func,
+                    progress_callback,
+                    md_content
+                )
+
+                # 保存报告
+                report_path = generator.save_report(report)
+                self.update_ui_safely(self.append_log, f"\n📊 生成报告已保存: {report_path}\n")
+
+                # 更新场景图片生成状态
+                for i in range(len(scenes)):
+                    self._mark_image_generated(project_name, i, success=True)
+
+                # 生成完成
+                self.update_ui_safely(self._on_unified_generation_complete, report)
+
+            except Exception as e:
+                import traceback
+                self.update_ui_safely(self.append_log, f"\n❌ 统一生成过程出错: {str(e)}\n")
+                self.update_ui_safely(self.append_log, f"详细错误:\n{traceback.format_exc()}\n")
+                self.update_ui_safely(self._on_unified_generation_complete, None, error=str(e))
+
+        # 启动后台线程
+        thread = threading.Thread(target=unified_generation_worker, daemon=True)
+        thread.start()
+
+    def _on_unified_generation_complete(self, report, error=None):
+        """统一智能生成完成回调"""
+        # 重置运行标志
+        self.batch_generation_running = False
+
+        # 重新启用生成按钮
+        self.generate_btn.configure(state='normal')
+        self.progress_var.set(0)
+        self.status_label.configure(text="就绪")
+
+        if error:
+            self.handle_async_error(f"统一智能生成失败: {error}")
+            return
+
+        # 提取报告信息
+        stats = report.get('stats', {})
+        analysis = report.get('analysis', {})
+        mode_used = report.get('mode_used', 'unknown')
+        api_stats = report.get('api_stats', {})
+
+        total_frames = stats.get('total_frames', 0)
+        success_rate = stats.get('success_rate', 0)
+        duration = stats.get('duration_seconds', 0)
+        scene_count = analysis.get('total_scenes', 0)
+
+        self.append_log(f"\n{'='*60}\n")
+        self.append_log(f"✅ 统一智能图片生成完成！\n")
+        self.append_log(f"   生成模式: {mode_used}\n")
+        self.append_log(f"   总帧数: {total_frames}\n")
+        self.append_log(f"   场景数: {scene_count}\n")
+        self.append_log(f"   成功率: {success_rate:.1f}%\n")
+        self.append_log(f"   总耗时: {duration:.1f}秒\n")
+
+        if api_stats:
+            self.append_log(f"   API调用: {api_stats.get('total_calls', 0)}次\n")
+            self.append_log(f"   API成功率: {api_stats.get('success_rate', 'N/A')}\n")
+
+        self.append_log(f"{'='*60}\n\n")
+        self.progress_label.configure(text=f"智能生成完成: {total_frames}帧, 成功率{success_rate:.1f}%")
+
+        # 显示完成信息
+        message = (
+            f"统一智能图片生成完成！\n\n"
+            f"生成模式: {mode_used}\n"
+            f"总帧数: {total_frames}\n"
+            f"场景数: {scene_count}\n"
+            f"成功率: {success_rate:.1f}%\n"
+            f"总耗时: {duration:.1f}秒\n\n"
+        )
+
+        if api_stats:
+            message += (
+                f"API统计:\n"
+                f"  总调用: {api_stats.get('total_calls', 0)}次\n"
+                f"  成功率: {api_stats.get('success_rate', 'N/A')}\n\n"
+            )
+
+        message += "生成报告已保存到 generation_report.json"
+
+        messagebox.showinfo("完成", message)
+
+    def frame_based_generation(self):
+        """
+        逐帧图片生成 - 支持新的 JSON 格式（每帧独立 prompt + seed）
+
+        特点：
+        1. 解析新的逐帧格式
+        2. 使用 JSON 中指定的 seed 确保帧间一致性
+        3. 按顺序生成每帧图片
+        4. API 调用频率限制
+        """
+        if not self.current_scripts or 'scenes' not in self.current_scripts:
+            messagebox.showwarning("警告", "请先加载有效的脚本文件")
+            return
+
+        if not self.current_title:
+            messagebox.showwarning("警告", "请先设置视频标题")
+            return
+
+        # 检查是否已经在运行
+        if self.batch_generation_running:
+            messagebox.showwarning("警告", "批量生成正在进行中，请等待完成")
+            return
+
+        # 检查是否包含新的逐帧格式
+        scenes = self.current_scripts['scenes']
+        has_frame_format = any('frames' in scene for scene in scenes)
+
+        if not has_frame_format:
+            # 如果没有逐帧格式，提示用户并回退到统一智能生成
+            self.append_log("⚠️ 脚本不包含逐帧格式，将使用统一智能生成模式\n")
+            self.unified_smart_generation()
+            return
+
+        # 获取输出路径
+        output_name = self.convert_title_to_filename(self.current_title)
+        output_path = os.path.join(self.output_dir, datetime.now().strftime("%Y%m"), output_name)
+        os.makedirs(output_path, exist_ok=True)
+
+        # 设置运行标志
+        self.batch_generation_running = True
+
+        # 开始逐帧生成
+        self._frame_based_generation_sync(self.current_scripts, output_name, output_path)
+
+    def _frame_based_generation_sync(self, script_data, project_name, output_path):
+        """同步执行逐帧生成
+
+        Args:
+            script_data: JSON 脚本数据
+            project_name: 项目名称
+            output_path: 输出路径
+        """
+        import threading
+
+        def frame_based_worker():
+            """在后台线程中执行逐帧生成任务"""
+            try:
+                from frame_based_generator import FrameBasedGenerator, FrameBasedConfig
+
+                self.update_ui_safely(self.append_log, f"\n{'='*60}\n")
+                self.update_ui_safely(self.append_log, f"🎬 开始逐帧图片生成\n")
+                self.update_ui_safely(self.append_log, f"{'='*60}\n\n")
+
+                # 创建配置
+                config = FrameBasedConfig(
+                    output_dir=output_path,
+                    min_interval=3.0,      # 3秒基础间隔
+                    max_interval=15.0,     # 最大15秒
+                    max_retries=3
+                )
+
+                generator = FrameBasedGenerator(config)
+
+                # 解析脚本获取帧信息
+                frames = generator.parse_script(script_data)
+                total_frames = len(frames)
+
+                self.update_ui_safely(self.append_log, f"📊 解析到 {total_frames} 帧待生成\n")
+
+                # 显示每场景的帧数
+                scene_counts = {}
+                for frame in frames:
+                    scene_id = frame['scene_id']
+                    scene_counts[scene_id] = scene_counts.get(scene_id, 0) + 1
+
+                self.update_ui_safely(self.append_log, f"📋 每场景帧数:\n")
+                for scene_id, count in sorted(scene_counts.items()):
+                    self.update_ui_safely(self.append_log, f"   场景 {scene_id}: {count} 帧\n")
+                self.update_ui_safely(self.append_log, f"\n")
+
+                # 定义图片生成函数
+                def image_generator_func(prompt, frame_path, scene_idx, seed):
+                    try:
+                        from auto_video_maker import ImageGenerator
+                        image_generator = ImageGenerator()
+
+                        # 获取当前场景信息
+                        scenes = script_data.get('scenes', [])
+                        scene = scenes[scene_idx] if scene_idx < len(scenes) else {}
+                        scene_id = scene.get('scene_id', scene_idx + 1)
+                        scene_note = scene.get('note', '')
+
+                        # 调用生成
+                        return image_generator.generate(
+                            prompt, frame_path, scene_id=scene_id, scene_note=scene_note
+                        )
+                    except Exception as e:
+                        self.update_ui_safely(self.append_log, f"   生成失败: {str(e)[:50]}\n")
+                        return False
+
+                # 定义进度回调
+                def progress_callback(current, total, message):
+                    self.update_ui_safely(self.progress_var.set, current)
+                    self.update_ui_safely(self.progress_label.configure, text=f"{message} ({current}%)")
+                    if current % 5 == 0 or current == total:
+                        self.update_ui_safely(self.append_log, f"  {message}\n")
+
+                # 执行逐帧生成
+                frame_files, report = generator.generate_frames(
+                    script_data,
+                    image_generator_func,
+                    progress_callback
+                )
+
+                # 保存报告
+                report_path = generator.save_report(report)
+                self.update_ui_safely(self.append_log, f"\n📊 生成报告已保存: {report_path}\n")
+
+                # 更新场景图片生成状态
+                for i in range(len(scene_counts)):
+                    self._mark_image_generated(project_name, i, success=True)
+
+                # 生成完成
+                self.update_ui_safely(self._on_frame_based_generation_complete, report)
+
+            except Exception as e:
+                import traceback
+                self.update_ui_safely(self.append_log, f"\n❌ 逐帧生成过程出错: {str(e)}\n")
+                self.update_ui_safely(self.append_log, f"详细错误:\n{traceback.format_exc()}\n")
+                self.update_ui_safely(self._on_frame_based_generation_complete, None, error=str(e))
+
+        # 启动后台线程
+        thread = threading.Thread(target=frame_based_worker, daemon=True)
+        thread.start()
+
+    def _on_frame_based_generation_complete(self, report, error=None):
+        """逐帧生成完成回调"""
+        # 重置运行标志
+        self.batch_generation_running = False
+
+        # 重新启用生成按钮
+        self.generate_btn.configure(state='normal')
+        self.progress_var.set(0)
+        self.status_label.configure(text="就绪")
+
+        if error:
+            self.handle_async_error(f"逐帧生成失败: {error}")
+            return
+
+        # 提取报告信息
+        stats = report.get('stats', {})
+        api_stats = report.get('api_stats', {})
+        frame_summary = report.get('frame_summary', {})
+
+        total_frames = stats.get('total_frames', 0)
+        success_rate = stats.get('success_rate', 0)
+        duration = stats.get('duration_seconds', 0)
+        scene_count = frame_summary.get('scenes', 0)
+
+        self.append_log(f"\n{'='*60}\n")
+        self.append_log(f"✅ 逐帧图片生成完成！\n")
+        self.append_log(f"   总帧数: {total_frames}\n")
+        self.append_log(f"   场景数: {scene_count}\n")
+        self.append_log(f"   成功率: {success_rate:.1f}%\n")
+        self.append_log(f"   总耗时: {duration:.1f}秒\n")
+
+        if api_stats:
+            self.append_log(f"   API调用: {api_stats.get('total_calls', 0)}次\n")
+            self.append_log(f"   API成功率: {api_stats.get('success_rate', 'N/A')}\n")
+
+        self.append_log(f"{'='*60}\n\n")
+        self.progress_label.configure(text=f"逐帧生成完成: {total_frames}帧, 成功率{success_rate:.1f}%")
+
+        # 显示完成信息
+        message = (
+            f"逐帧图片生成完成！\n\n"
+            f"总帧数: {total_frames}\n"
+            f"场景数: {scene_count}\n"
+            f"成功率: {success_rate:.1f}%\n"
+            f"总耗时: {duration:.1f}秒\n\n"
+        )
+
+        if api_stats:
+            message += (
+                f"API统计:\n"
+                f"  总调用: {api_stats.get('total_calls', 0)}次\n"
+                f"  成功率: {api_stats.get('success_rate', 'N/A')}\n\n"
+            )
+
+        message += "生成报告已保存到 frame_generation_report.json"
+
+        messagebox.showinfo("完成", message)
+
     def start_generation(self):
         """异步开始视频生成"""
         if not self.current_title:
@@ -1526,19 +2380,148 @@ class VideoCreatorGUI:
                     audio_file = os.path.join(output_dir, "silent_audio.mp3")
                     self._create_silent_audio(audio_file, sum(scene_durations))
                 
-                # 调用真实的视频合成器
-                from auto_video_maker import VideoCompositor
-                video_comp = VideoCompositor(output_dir)
-                
                 output_name = self.convert_title_to_filename(self.current_title)
                 video_path = os.path.join(output_dir, f"{output_name}.mp4")
                 
-                self.update_ui_safely(self.append_log, "🎬 开始视频合成...\n")
-                
-                # 执行视频合成
-                success = video_comp.create(audio_file, image_files, scene_durations, video_path)
+                # 根据模式选择生成器
+                if self.cinematic_mode:
+                    # 电影效果模式 - 使用 CinematicVideoGenerator
+                    self.update_ui_safely(self.append_log, "🎬 使用电影效果模式生成视频...\n")
+                    self.update_ui_safely(self.append_log, "   (24fps + 多帧生成创造电影感)\n")
+                    
+                    from cinematic_video_generator import CinematicVideoGenerator, CinematicConfig
+                    
+                    # 创建配置
+                    config = CinematicConfig(
+                        fps=24,
+                        frames_per_scene=3,  # 方案A：每场景3帧
+                        resolution=(1920, 1080) if self.current_aspect_ratio == (16, 9) else (1080, 1920)
+                    )
+                    
+                    video_gen = CinematicVideoGenerator(output_dir, config)
+                    
+                    # 收集所有帧文件（电影效果模式下，查找已生成的多帧图片）
+                    all_frame_files = []
+                    frames_found = 0
+                    frames_missing = 0
+                    
+                    for scene_idx in range(len(scenes)):
+                        scene_frames = []
+                        # 查找该场景的电影效果帧（使用 _frame_ 命名格式）
+                        for frame_i in range(3):
+                            frame_path = os.path.join(
+                                output_dir,
+                                f"scene_{scene_idx:03d}_frame_{frame_i:03d}.jpg"
+                            )
+                            if os.path.exists(frame_path):
+                                scene_frames.append(frame_path)
+                                frames_found += 1
+                            else:
+                                frames_missing += 1
+                        
+                        # 如果找到了电影效果帧，使用它们
+                        if len(scene_frames) == 3:
+                            all_frame_files.extend(scene_frames)
+                        else:
+                            # 如果没有找到电影效果帧，使用标准图片并复制3次
+                            std_img_path = os.path.join(output_dir, f"scene_{scene_idx:03d}.jpg")
+                            if os.path.exists(std_img_path):
+                                self.update_ui_safely(self.append_log, f"⚠️ 场景 {scene_idx+1} 未找到电影效果帧，使用标准图片\n")
+                                for frame_i in range(3):
+                                    frame_path = os.path.join(
+                                        video_gen.frames_dir,
+                                        f"scene_{scene_idx:03d}_frame_{frame_i:03d}.jpg"
+                                    )
+                                    import shutil
+                                    shutil.copy(std_img_path, frame_path)
+                                    all_frame_files.append(frame_path)
+                                    frames_found += 1
+                    
+                    self.update_ui_safely(self.append_log, f"📊 找到 {frames_found} 帧，缺失 {frames_missing} 帧\n")
+                    
+                    if not all_frame_files:
+                        raise Exception("没有找到任何图片帧")
+                    
+                    # 定义进度回调
+                    def cinematic_progress_callback(step, total, message):
+                        progress = (step / total) * 100
+                        self.update_ui_safely(self.progress_var.set, progress)
+                        self.update_ui_safely(self.progress_label.configure, text=f"{message} ({step}/{total})")
+                        self.update_ui_safely(self.append_log, f"  {message}\n")
+                    
+                    # 执行电影效果视频合成
+                    success = video_gen.create_cinematic_video(
+                        audio_file,
+                        all_frame_files,
+                        scene_durations,
+                        video_path,
+                        progress_callback=cinematic_progress_callback
+                    )
+                    
+                else:
+                    # 标准模式 - 使用增强版视频生成器（解决切换过快问题）
+                    from enhanced_video_generator import (
+                        EnhancedVideoGenerator, EnhancedVideoConfig,
+                        DisplayMode, create_smooth_slideshow
+                    )
+
+                    # 根据选择的比例设置分辨率
+                    if self.current_aspect_ratio == (16, 9):
+                        resolution = (1920, 1080)
+                        self.update_ui_safely(self.append_log, "🖥️ 使用横屏模式 (16:9)\n")
+                    else:
+                        resolution = (1080, 1920)
+                        self.update_ui_safely(self.append_log, "📱 使用竖屏模式 (9:16)\n")
+
+                    self.update_ui_safely(self.append_log, "🎬 开始视频合成（增强版）...\n")
+                    self.update_ui_safely(self.append_log, "✨ 使用 Ken Burns 效果，每张图片显示更长时间\n")
+
+                    # 创建增强版配置
+                    config = EnhancedVideoConfig(
+                        display_mode=DisplayMode.KEN_BURNS,
+                        resolution=resolution,
+                        min_scene_duration=3.0,      # 最少3秒
+                        max_scene_duration=10.0,     # 最多10秒
+                        transition_duration=1.0,     # 1秒过渡
+                        fps=30
+                    )
+
+                    video_gen = EnhancedVideoGenerator(output_dir, config)
+
+                    # 定义进度回调
+                    def progress_callback(step, total, message):
+                        progress = (step / total) * 100
+                        self.update_ui_safely(self.progress_var.set, progress)
+                        self.update_ui_safely(self.progress_label.configure, text=f"{message} ({step}/{total})")
+                        if message:
+                            self.update_ui_safely(self.append_log, f"  {message}\n")
+
+                    # 执行增强版视频合成
+                    success = video_gen.create_enhanced_video(
+                        audio_file,
+                        image_files,
+                        scene_durations,
+                        video_path,
+                        progress_callback=progress_callback
+                    )
                 
                 if success and os.path.exists(video_path):
+                    # 获取编码报告
+                    if hasattr(video_gen, 'get_encoding_report'):
+                        report = video_gen.get_encoding_report()
+                        if report:
+                            self.update_ui_safely(self.append_log, f"\n📈 编码报告:\n")
+                            self.update_ui_safely(self.append_log, f"   文件大小: {report['file_size_mb']:.1f} MB\n")
+                            self.update_ui_safely(self.append_log, f"   视频时长: {report['duration_sec']:.1f} 秒\n")
+                            if 'resolution' in report:
+                                self.update_ui_safely(self.append_log, f"   分辨率: {report['resolution'][0]}x{report['resolution'][1]}\n")
+                            if 'encoding_settings' in report and 'codec' in report['encoding_settings']:
+                                self.update_ui_safely(self.append_log, f"   编码器: {report['encoding_settings']['codec']}\n")
+                            if 'complexity_analysis' in report and 'complexity' in report['complexity_analysis']:
+                                self.update_ui_safely(self.append_log, f"   复杂度: {report['complexity_analysis']['complexity']}\n")
+                            if 'fps' in report:
+                                self.update_ui_safely(self.append_log, f"   帧率: {report['fps']} fps\n")
+                    
                     self.update_ui_safely(self.append_log, f"✅ 视频合成成功: {video_path}\n")
                     return video_path
                 else:
@@ -1633,6 +2616,28 @@ class VideoCreatorGUI:
             self.output_entry.delete(0, tk.END)
             self.output_entry.insert(0, directory)
             self.output_dir = directory
+    
+    def on_aspect_ratio_changed(self, event=None):
+        """视频比例切换事件"""
+        ratio_text = self.aspect_ratio_var.get()
+        if "9:16" in ratio_text:
+            self.current_aspect_ratio = (9, 16)
+            self.append_log("📱 切换为竖屏模式 (9:16)\n")
+        else:
+            self.current_aspect_ratio = (16, 9)
+            self.append_log("🖥️ 切换为横屏模式 (16:9)\n")
+    
+    def on_video_mode_changed(self, event=None):
+        """视频模式切换事件"""
+        mode_text = self.video_mode_var.get()
+        if "电影" in mode_text:
+            self.cinematic_mode = True
+            self.append_log("🎬 切换到电影效果模式 (24fps + 多帧生成)\n")
+            self.append_log("   每个场景将生成3帧略有变化的图片\n")
+            self.append_log("   模拟摄像机运动创造电影感\n")
+        else:
+            self.cinematic_mode = False
+            self.append_log("📹 切换到标准视频模式\n")
             
     def on_title_change(self, event):
         """标题变化事件"""
