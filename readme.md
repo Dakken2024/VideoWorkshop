@@ -1,288 +1,250 @@
-# 🎬 视频自动生成工具使用手册
+# Video Workshop - 智能视频自动生成工具
 
-## 📋 项目概述
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
-这是一个完整的视频自动生成解决方案，能够将文章内容自动转换为带字幕、配音的专业视频。系统包含智能图片生成、TTS语音合成、视频合成等核心功能。
+Video Workshop 是一款开源的智能视频自动生成工具，能够将文章内容自动转换为带字幕、配音的专业视频。系统支持 AI 内容创作、智能图片生成、TTS 语音合成、视频合成等核心功能，提供图形界面和命令行两种使用方式。
 
-## 🚀 完整使用流程
+## 功能特性
 
-### 第一步：内容准备（使用通义千问网页版）
+### 核心功能
+- **一键视频生成** - 从脚本 JSON 自动完成音频、图片、视频合成，支持断点续传
+- **AI 内容创作** - 集成 DeepSeek V4 Flash 大模型，支持主题搜索、文章生成、脚本转换
+- **智能字幕系统** - 自动生成、检测、对齐、嵌入字幕，支持 SRT/ASS 格式
+- **多语种语音合成** - 基于 edge-tts 的免费高音质语音合成，支持多种语言和角色
+- **GPU 加速检测** - 自动检测 GPU 编码器，不可用时自动回退到 CPU
 
-#### 1.1 访问通义千问
-打开浏览器，访问 [chat.qwen.ai](https://chat.qwen.ai)
+### 交互方式
+- **图形界面 (GUI)** - 5 个功能标签页，适合非编程用户
+- **命令行 (CLI)** - 完整的命令行接口，适合自动化集成
+- **Python API** - 模块化编程接口，支持自定义工作流
 
-#### 1.2 生成文章内容
-在对话框中输入以下提示词：
+### 技术特性
+- 模块化架构，易于扩展和维护
+- 集中配置管理，支持环境变量覆盖
+- 完整的错误处理和自动恢复机制
+- 44 个单元测试，核心功能覆盖率 100%
 
+## 快速开始
+
+### 环境要求
+
+- **Python**: 3.8 或更高版本
+- **FFmpeg**: 已安装并添加到系统 PATH
+- **操作系统**: Windows 10/11（推荐）、Linux、macOS
+
+### 安装
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/yourusername/VideoWorkshop.git
+cd VideoWorkshop
+
+# 2. 安装依赖
+pip install -r requirements.txt
+
+# 3. 配置 API Key（可选）
+# 复制配置模板并填写你的 API Key
+cp video_gen/.env.example .env
 ```
-请帮我写一篇关于[你的主题]的文章，要求：
-1. 内容生动有趣，适合视频解说
-2. 字数控制在800-1200字左右
-3. 结构清晰，有明确的段落划分
-4. 语言通俗易懂，富有感染力
+
+### 启动 GUI
+
+```bash
+# 方式一：双击运行
+run_gui.bat
+
+# 方式二：命令行启动
+python video_gen/gui_launcher.py
 ```
 
-#### 1.3 生成脚本文件
-在同一对话中继续输入：
+### 启动 CLI
 
+```bash
+# 系统诊断
+python -m video_gen.cli diagnose
+
+# 一键生成视频
+python -m video_gen.cli generate -t "视频标题" -s scripts.json
 ```
-请将上面的文章转换为视频脚本格式，输出为标准的JSON格式，包含以下字段：
-- meta: 包含标题、作者、描述等元信息
-- scenes: 包含多个场景，每个场景有：
-  - scene_id: 场景编号
-  - text: 配音文本
-  - prompt: 图片生成提示词
-  - note: 场景说明
-  - duration_sec: 场景时长（秒）
 
-示例格式：
+## 使用指南
+
+### 准备工作
+
+1. **准备脚本文件** - 创建 `scripts.json`，包含场景列表和元信息
+2. **配置 API** - 在 GUI 的"API 设置"标签页中配置 DeepSeek 等 API Key
+3. **开始生成** - 选择"视频生成"标签页，点击"开始生成视频"
+
+### 脚本格式
+
+```json
 {
   "meta": {
-    "title": "文章标题",
-    "author": "作者名",
+    "title": "视频标题",
     "description": "视频描述"
   },
   "scenes": [
     {
       "scene_id": 1,
-      "text": "这里是配音文本内容",
-      "prompt": "这里是图片生成的详细提示词",
-      "note": "场景说明",
-      "duration_sec": 5
+      "text": "配音文本",
+      "prompt": "图片生成提示词",
+      "duration_sec": 5,
+      "note": "场景说明"
     }
   ]
 }
 ```
 
-### 第二步：文件准备
+### 输出目录结构
 
-#### 2.1 保存文章文件
-将生成的文章内容保存为 `.md` 文件，例如：`我的视频标题.md`
+```
+output/
+└── 202608/                          # 年月目录
+    └── wo_de_shi_pin/               # 视频目录（拼音名）
+        ├── scripts.json             # 脚本文件
+        ├── voiceover.mp3            # 音频文件
+        ├── scene_000.jpg            # 场景图片
+        ├── ...
+        └── wo_de_shi_pin.mp4        # 最终视频（含字幕）
+```
 
-#### 2.2 保存脚本文件
-将生成的JSON脚本保存为 `scripts.json` 文件
+## API 文档
 
-#### 2.3 文件放置
-将两个文件放在项目根目录下：
+### 命令行接口
+
+| 命令 | 功能 | 示例 |
+|------|------|------|
+| `generate` | 完整视频生成 | `cli generate -t "标题" -s scripts.json` |
+| `audio` | 仅生成音频 | `cli audio -s scripts.json -o ./output` |
+| `images` | 仅生成图片 | `cli images -s scripts.json -o ./output` |
+| `compose` | 合成视频 | `cli compose -s scripts.json -a audio.mp3 -i ./images -o ./output` |
+| `subtitles` | 字幕导入 | `cli subtitles -v video.mp4 -s scripts.json` |
+| `diagnose` | 系统诊断 | `cli diagnose` |
+
+### Python API
+
+```python
+from video_gen.workflow import OptimizedWorkflow
+
+# 创建工作流
+workflow = OptimizedWorkflow()
+
+# 一键生成
+result = workflow.quick_generate(
+    script_path="scripts.json",
+    title="我的视频",
+    output_dir="./output"
+)
+
+# 处理结果
+if result["success"]:
+    print(f"视频: {result['video_path']}")
+else:
+    print(f"错误: {result['errors']}")
+```
+
+### 配置管理
+
+```python
+from video_gen.config import AppConfig, DEFAULT_CONFIG
+
+# 使用默认配置
+config = DEFAULT_CONFIG
+
+# 自定义配置
+config.ai.enabled = True
+config.ai.api_key = "your-api-key"
+config.video.fps = 30
+```
+
+## 项目结构
+
 ```
 VideoWorkshop/
-├── 我的视频标题.md
-├── scripts.json
-└── ... (其他文件)
+├── video_gen/                  # 核心代码（模块化架构）
+│   ├── ai/                     # AI 模块（DeepSeek、搜索、提示词）
+│   ├── audio/                  # 音频生成模块
+│   ├── core/                   # 核心引擎（流水线、状态管理）
+│   ├── gui/                    # 图形界面（5 个标签页）
+│   ├── image/                  # 图片生成模块
+│   ├── tests/                  # 测试套件（44 个用例）
+│   ├── utils/                  # 工具模块
+│   ├── video/                  # 视频合成模块
+│   ├── config.py               # 集中配置管理
+│   ├── cli.py                  # 命令行入口
+│   ├── workflow.py             # 精简工作流
+│   └── gui_launcher.py         # GUI 启动器
+├── legacy/                     # 遗留代码（原 v1 版本）
+├── scripts/                    # 调试和测试脚本
+├── reports/                    # 技术分析报告
+├── articles/                   # 示例文章
+├── docs/                       # 技术文档
+│   └── plans/                  # 设计文档
+├── readme.md                   # 本文件
+├── CHANGELOG.md                # 更新日志
+├── CONTRIBUTING.md             # 贡献指南
+├── CODE_OF_CONDUCT.md          # 行为准则
+├── LICENSE                     # 开源许可证
+├── requirements.txt            # 依赖清单
+├── run_gui.bat                 # Windows 启动脚本
+└── setup_ffmpeg.bat            # FFmpeg 安装脚本
 ```
 
-### 第三步：启动视频制作程序
-
-#### 3.1 启动GUI程序
-在项目根目录下执行：
-```bash
-python video_creator_gui.py
-```
-
-或者双击启动脚本：
-```bash
-start_gui.bat
-```
-
-#### 3.2 程序界面介绍
-程序包含以下标签页：
-- **视频内容**：编辑文章内容
-- **视频脚本**：查看和编辑脚本
-- **图片管理**：管理场景图片
-- **视频生成**：配置和生成视频
-- **生成记录**：查看历史记录
-- **运行日志**：查看详细日志
-
-### 第四步：导入内容
-
-#### 4.1 导入文章内容
-1. 切换到"视频内容"标签页
-2. 点击"从文件加载"按钮
-3. 选择你保存的 `.md` 文件
-4. 系统会自动提取标题
-
-#### 4.2 导入脚本文件
-1. 切换到"视频脚本"标签页
-2. 点击"从文件加载"按钮
-3. 选择 `scripts.json` 文件
-4. 点击"验证JSON"确保格式正确
-
-### 第五步：图片生成
-
-#### 5.1 查看场景列表
-1. 切换到"图片管理"标签页
-2. 在左侧场景列表中查看所有场景
-3. 场景按scene_id顺序排列
-
-#### 5.2 生成单个图片
-1. 在场景列表中选择一个场景
-2. 在右侧预览区域查看prompt内容
-3. 点击"重新生成图片"按钮
-4. 等待生成完成（通常需要10-30秒）
-
-#### 5.3 批量生成图片
-1. 点击"批量生成所有图片"按钮
-2. 系统会自动为所有场景生成图片
-3. 生成过程中可在"运行日志"标签页查看进度
-4. 图片会自动保存到 `output/年月/项目名/` 目录下
-
-#### 5.4 手动替换图片
-1. 选择场景后点击"本地选择图片"
-2. 选择本地图片文件
-3. 系统会自动调整图片尺寸为1080×1920
-
-### 第六步：视频生成
-
-#### 6.1 配置生成选项
-1. 切换到"视频生成"标签页
-2. 设置输出目录（默认为 `./output`）
-3. 选择生成选项：
-   - ✅ 生成音频（推荐勾选）
-   - ✅ 生成视频（推荐勾选）
-
-#### 6.2 开始生成
-1. 点击"开始生成视频"按钮
-2. 等待生成过程完成（通常需要1-5分钟）
-3. 生成进度会在进度条中显示
-
-#### 6.3 生成过程说明
-系统会依次执行：
-1. **音频生成**：使用edge-tts将文本转换为语音
-2. **图片处理**：检查和完善场景图片
-3. **视频合成**：将图片、音频、字幕合成为最终视频
-
-### 第七步：后期处理
-
-#### 7.1 查看生成结果
-1. 切换到"生成记录"标签页
-2. 找到刚生成的项目
-3. 双击项目或点击"播放视频"查看效果
-
-#### 7.2 导入剪映进行后期
-1. 在"生成记录"中找到项目
-2. 点击"打开文件夹"按钮
-3. 在文件夹中找到生成的 `.mp4` 文件
-4. 将视频导入剪映等视频编辑软件
-
-#### 7.3 剪映后期处理建议
-在剪映中可以进行：
-- **字幕优化**：调整字幕样式、位置、动画
-- **背景音乐**：添加合适的背景音乐
-- **特效处理**：添加转场效果、滤镜等
-- **节奏调整**：微调视频节奏和时长
-- **封面设计**：制作吸引人的视频封面
-
-## ⚙️ 系统配置说明
+## 配置说明
 
 ### 必需依赖
-确保已安装以下组件：
-- Python 3.8+
-- FFmpeg（用于视频处理）
-- 相关Python库（见 `requirements.txt`）
 
-### FFmpeg安装
-1. 运行 `install_ffmpeg.ps1`（推荐）
-2. 或手动下载并配置环境变量
-3. 验证安装：在命令行输入 `ffmpeg --version`
+| 组件 | 版本要求 | 说明 |
+|------|----------|------|
+| Python | 3.8+ | 运行环境 |
+| FFmpeg | 最新版 | 视频处理，需添加到 PATH |
+| moviepy | 2.0.0+ | 视频合成 |
+| Pillow | 9.0.0+ | 图片处理 |
+| edge-tts | 6.1.9+ | 语音合成 |
+| pydub | - | 音频处理 |
 
-### API配置
-系统默认使用以下AI服务：
-- **图片生成**：gen.pollinations.ai（需要API密钥）
-- **语音合成**：edge-tts（免费）
-- **本地备选**：内置图片生成器
+### API 配置
 
-##  troubleshoot 常见问题
+| 服务 | 用途 | 获取方式 | 是否必需 |
+|------|------|----------|----------|
+| Pollinations | 图片生成 | 免费使用 | 是 |
+| DeepSeek | AI 内容生成 | [platform.deepseek.com](https://platform.deepseek.com) | 否 |
+| SerpAPI | 搜索引擎 | [serpapi.com](https://serpapi.com) | 否 |
+| Tavily | AI 搜索 | [tavily.com](https://tavily.com) | 否 |
+
+## 常见问题
+
+### GPU 编码器错误
+- 系统会自动检测并回退到 CPU 编码（libx264）
+- 如手动指定，修改 `video_gen/video/encoder.py` 中的 `gpu_encoders` 列表
+
+### 字幕未显示
+- 使用 `--dry-run` 模式检查字幕文件是否生成
+- 确认 FFmpeg 支持字幕滤镜
+
+### 音频生成超时
+- 系统会自动分段处理长文本
+- 建议将脚本文本控制在 2000 字符以内
 
 ### 图片生成失败
-- **现象**：显示530错误或生成失败
-- **解决方案**：
-  1. 检查网络连接
-  2. 系统会自动切换到本地生成
-  3. 可以手动选择本地图片替换
+- 系统会自动重试 3 次，失败后创建占位图
+- 检查网络连接和 API 配置
 
-### 音频生成缓慢
-- **现象**：音频生成时间过长
-- **解决方案**：
-  1. 系统有超时保护机制
-  2. 会自动分段处理长文本
-  3. 可在网络较好的时段重试
+## 贡献指南
 
-### 视频合成失败
-- **现象**：FFmpeg相关错误
-- **解决方案**：
-  1. 确认FFmpeg已正确安装
-  2. 检查环境变量配置
-  3. 查看详细错误日志
+我们欢迎所有形式的贡献！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详细信息。
 
-### 中文字幕显示问题
-- **现象**：字幕乱码或显示异常
-- **解决方案**：
-  1. 确保使用支持中文的字体
-  2. 在剪映中重新添加字幕
-  3. 调整字幕样式和位置
+## 许可证
 
-## 💡 使用技巧
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
-### 提升生成质量
-1. **优化提示词**：在scripts.json中编写详细、具体的图片提示词
-2. **合理分段**：控制每个场景的文本长度（建议50-150字）
-3. **时长控制**：根据文本内容合理设置duration_sec
+## 联系方式
 
-### 提高工作效率
-1. **批量操作**：使用批量生成功能一次性处理多个场景
-2. **模板复用**：保存常用的scripts.json模板
-3. **并行处理**：在等待生成时可以准备下一个项目
-
-### 质量把控
-1. **预览检查**：生成后及时预览效果
-2. **逐个审核**：对重要场景单独重新生成
-3. **多次迭代**：不满意时可以反复调整prompt
-
-## 📁 项目目录结构
-
-```
-VideoWorkshop/
-├── auto_video_maker.py          # 核心引擎
-├── video_creator_gui.py         # GUI界面
-├── requirements.txt             # 依赖配置
-├── scripts.json                 # 脚本模板
-├── start_gui.bat               # 启动脚本
-├── output/                     # 输出目录
-│   └── YYYYMM/                 # 按年月分类
-│       └── project_name/       # 项目文件夹
-│           ├── scene_000.jpg    # 场景图片
-│           ├── voiceover.mp3   # 音频文件
-│           ├── scripts.json    # 项目脚本
-│           └── project_name.mp4 # 最终视频
-├── ffmpeg/                     # FFmpeg相关
-└── docs/                       # 技术文档
-```
-
-## 🔧 高级功能
-
-### 自定义配置
-- 修改 `scripts.json` 中的参数
-- 调整场景时长和过渡效果
-- 自定义水印和字幕样式
-
-### API密钥管理
-- 在代码中配置gen.pollinations.ai的API密钥
-- 可以添加其他AI服务作为备选
-
-### 批量处理
-- 支持同时处理多个项目
-- 可以设置自动化工作流
-
-## 📞 技术支持
-
-如遇问题，请查看：
-1. **运行日志**：在GUI的"运行日志"标签页
-2. **技术文档**：`docs/` 目录下的详细说明
-3. **错误代码**：根据具体错误信息查找解决方案
+- GitHub Issues: [提交问题](https://github.com/yourusername/VideoWorkshop/issues)
+- 项目主页: [Video Workshop](https://github.com/yourusername/VideoWorkshop)
 
 ---
 
-**版本**：v2.0  
-**更新时间**：2026年2月  
-**适用平台**：Windows 10/11  
-**Python版本**：3.8+
+**版本**: v2.0 | **更新时间**: 2026-08-01 | **适用平台**: Windows / Linux / macOS

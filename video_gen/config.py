@@ -107,6 +107,71 @@ class ImageConfig:
     api_key: str = os.environ.get("POLLINATIONS_API_KEY", "pk_WyzA9ElvE2wF2Nqu")
 
 
+# ==================== AI 大模型配置 ====================
+
+@dataclass
+class AIConfig:
+    """AI 大模型配置"""
+    enabled: bool = False
+    provider: str = "deepseek"
+    api_key: str = os.environ.get("AI_API_KEY", "sk-f6a5d3e3eef74b9f9ed1734774d53206")
+    base_url: str = "https://api.deepseek.com"
+    model: str = "deepseek-v4-flash"
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    # 模块级开关
+    modules: Dict[str, bool] = field(default_factory=lambda: {
+        "content_generation": False,
+        "script_generation": False,
+        "prompt_enhancement": False,
+    })
+
+
+# ==================== 搜索服务配置 ====================
+
+@dataclass
+class SearchConfig:
+    """搜索服务配置"""
+    serpapi_key: str = os.environ.get("SERPAPI_KEY", "")
+    tavily_key: str = os.environ.get("TAVILY_KEY", "")
+
+
+# ==================== 文生图 API 配置 ====================
+
+@dataclass
+class ImageAPIProvider:
+    """文生图 API 服务商配置"""
+    name: str = "Pollinations (免费)"
+    enabled: bool = True
+    base_url: str = "https://gen.pollinations.ai/image/"
+    api_key: str = ""
+    model: str = "flux"
+
+
+@dataclass
+class ImageAPIConfig:
+    """文生图 API 多服务商配置"""
+    providers: List[ImageAPIProvider] = field(default_factory=lambda: [
+        ImageAPIProvider(name="Pollinations (免费)", enabled=True,
+                         base_url="https://gen.pollinations.ai/image/",
+                         api_key="", model="flux"),
+        ImageAPIProvider(name="自定义", enabled=False,
+                         base_url="", api_key="", model=""),
+    ])
+    active_provider: int = 0  # 当前使用的服务商索引
+
+
+# ==================== 语音合成配置 ====================
+
+@dataclass
+class VoiceConfig:
+    """语音合成配置"""
+    provider: str = "edge-tts"  # edge-tts, custom
+    custom_base_url: str = ""
+    custom_api_key: str = ""
+    custom_model: str = ""
+
+
 # ==================== 主配置 ====================
 
 @dataclass
@@ -117,6 +182,10 @@ class AppConfig:
     subtitle: SubtitleConfig = field(default_factory=SubtitleConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     image: ImageConfig = field(default_factory=ImageConfig)
+    ai: AIConfig = field(default_factory=AIConfig)
+    search: SearchConfig = field(default_factory=SearchConfig)
+    image_api: ImageAPIConfig = field(default_factory=ImageAPIConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
 
     # 应用设置
     window_width: int = 1200
