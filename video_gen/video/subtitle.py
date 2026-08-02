@@ -105,15 +105,17 @@ class SubtitleGenerator:
         self,
         scenes: List[Dict],
         audio_duration: Optional[float] = None,
-        scene_audio_durations: Optional[List[float]] = None
+        scene_audio_durations: Optional[List[float]] = None,
+        bilingual: bool = False
     ) -> List[SubtitleEntry]:
         """
         从场景列表生成字幕条目
 
         Args:
-            scenes: 场景列表，每个包含 text, duration_sec 等字段
+            scenes: 场景列表，每个包含 text, duration_sec, subtitle_cn, subtitle_en 等字段
             audio_duration: 总音频时长（秒），如有则按比例分配
             scene_audio_durations: 每场景音频时长列表（秒），精确对齐
+            bilingual: 是否生成中英双语字幕
 
         Returns:
             字幕条目列表
@@ -122,15 +124,34 @@ class SubtitleGenerator:
             logger.warning("场景列表为空，无法生成字幕")
             return []
 
+        # 预处理：提取字幕文本（优先使用 subtitle_cn/subtitle_en）
+        processed_scenes = []
+        for scene in scenes:
+            processed = dict(scene)
+            subtitle_cn = scene.get('subtitle_cn', '').strip()
+            subtitle_en = scene.get('subtitle_en', '').strip()
+
+            if bilingual and subtitle_cn and subtitle_en:
+                # 双语字幕：中文 + 换行 + 英文
+                processed['text'] = f"{subtitle_cn}\n{subtitle_en}"
+            elif subtitle_cn:
+                # 优先使用中文字幕
+                processed['text'] = subtitle_cn
+            else:
+                # 回退到 text 字段
+                processed['text'] = scene.get('text', '').strip()
+
+            processed_scenes.append(processed)
+
         if scene_audio_durations:
             # 精确时间轴对齐
-            return self._generate_with_exact_timing(scenes, scene_audio_durations)
+            return self._generate_with_exact_timing(processed_scenes, scene_audio_durations)
         elif audio_duration:
             # 按比例分配
-            return self._generate_with_proportional_timing(scenes, audio_duration)
+            return self._generate_with_proportional_timing(processed_scenes, audio_duration)
         else:
             # 使用预设时长
-            return self._generate_with_preset_timing(scenes)
+            return self._generate_with_preset_timing(processed_scenes)
 
     def _generate_with_exact_timing(
         self, scenes: List[Dict], scene_audio_durations: List[float]
@@ -148,6 +169,20 @@ class SubtitleGenerator:
 
             duration = scene_audio_durations[i] if i < len(scene_audio_durations) else 3.0
             scene_id = scene.get('scene_id', i + 1)
+
+            # 双语字幕（含 \n）整条显示，不做分句
+            is_bilingual = '\n' in text
+            if is_bilingual:
+                entries.append(SubtitleEntry(
+                    index=index,
+                    start_time=current_time,
+                    end_time=current_time + duration,
+                    text=text,
+                    scene_id=scene_id
+                ))
+                index += 1
+                current_time += duration
+                continue
 
             # 对长文本进行分句（按句号分割）
             sub_texts = self._split_text(text)
@@ -470,7 +505,8 @@ class SubtitleManager:
     def process(self, scenes: List[Dict], video_path: str, output_path: str,
                 audio_duration: Optional[float] = None,
                 scene_audio_durations: Optional[List[float]] = None,
-                progress_callback: Optional[Callable] = None) -> bool:
+                progress_callback: Optional[Callable] = None,
+                bilingual: bool = False) -> bool:
         """
         完整字幕处理流程
 
@@ -481,6 +517,7 @@ class SubtitleManager:
             audio_duration: 音频总时长
             scene_audio_durations: 每场景音频时长
             progress_callback: 进度回调
+            bilingual: 是否生成中英双语字幕
 
         Returns:
             是否成功
@@ -488,6 +525,14 @@ class SubtitleManager:
         if not self.config.enabled:
             logger.info("字幕功能已禁用，跳过")
             return False
+
+        # 自动检测是否启用双语字幕
+        if not bilingual:
+            has_cn = any(s.get('subtitle_cn', '').strip() for s in scenes)
+            has_en = any(s.get('subtitle_en', '').strip() for s in scenes)
+            if has_cn and has_en:
+                bilingual = True
+                logger.info("检测到 subtitle_cn 和 subtitle_en 字段，自动启用双语字幕")
 
         # 步骤1：检测字体
         if progress_callback:
@@ -498,7 +543,7 @@ class SubtitleManager:
         if progress_callback:
             progress_callback(25, 100, "生成字幕内容")
         entries = self.generator.generate_from_scenes(
-            scenes, audio_duration, scene_audio_durations
+            scenes, audio_duration, scene_audio_durations, bilingual=bilingual
         )
         if not entries:
             logger.warning("未生成字幕条目")
