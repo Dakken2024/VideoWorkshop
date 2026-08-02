@@ -11,7 +11,7 @@ Video Workshop 是一款开源的智能视频自动生成工具，能够将文�
 ### 核心功能
 - **一键视频生成** - 从脚本 JSON 自动完成音频、图片、视频合成，支持断点续传
 - **AI 内容创作** - 集成 DeepSeek V4 Flash 大模型，支持主题搜索、文章生成、脚本转换
-- **智能字幕系统** - 自动生成、检测、对齐、嵌入字幕，支持 SRT/ASS 格式
+- **中英双语字幕** - 自动检测 `subtitle_cn`/`subtitle_en` 字段，生成双语字幕并嵌入视频，支持 SRT/ASS 格式
 - **多语种语音合成** - 基于 edge-tts 的免费高音质语音合成，支持多种语言和角色
 - **GPU 加速检测** - 自动检测 GPU 编码器，不可用时自动回退到 CPU
 
@@ -89,14 +89,22 @@ python -m video_gen.cli generate -t "视频标题" -s scripts.json
   "scenes": [
     {
       "scene_id": 1,
-      "text": "配音文本",
+      "text": "配音文本（用于语音合成）",
       "prompt": "图片生成提示词",
       "duration_sec": 5,
-      "note": "场景说明"
+      "note": "场景说明",
+      "subtitle_cn": "中文字幕文本（可选，优先于 text 用于字幕显示）",
+      "subtitle_en": "English subtitle (optional, displayed below Chinese)"
     }
   ]
 }
 ```
+
+> **字幕字段说明**：
+> - `text`：必填，用于语音合成（TTS）
+> - `subtitle_cn`：可选，中文字幕文本。如同时提供 `subtitle_en`，自动启用双语字幕
+> - `subtitle_en`：可选，英文字幕。与 `subtitle_cn` 同时存在时显示为双语字幕
+> - 若未提供 `subtitle_cn`，系统回退使用 `text` 字段作为字幕
 
 ### 输出目录结构
 
@@ -218,8 +226,9 @@ VideoWorkshop/
 - 如手动指定，修改 `video_gen/video/encoder.py` 中的 `gpu_encoders` 列表
 
 ### 字幕未显示
-- 使用 `--dry-run` 模式检查字幕文件是否生成
-- 确认 FFmpeg 支持字幕滤镜
+- 确认 `subtitle_cn` / `subtitle_en` 字段不为空（或 `text` 字段有内容）
+- 检查输出目录中是否生成了 `.srt` 或 `.ass` 字幕文件
+- 确认 FFmpeg 支持字幕滤镜（`subtitles` / `ass`）
 
 ### 音频生成超时
 - 系统会自动分段处理长文本
@@ -244,4 +253,4 @@ VideoWorkshop/
 
 ---
 
-**版本**: v2.0 | **更新时间**: 2026-08-01 | **适用平台**: Windows / Linux / macOS
+**版本**: v2.1 | **更新时间**: 2026-08-02 | **适用平台**: Windows / Linux / macOS
