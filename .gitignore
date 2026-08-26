@@ -1,104 +1,72 @@
-# ====================
-# 操作系统文件
-# ====================
-Thumbs.db
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-
-# ====================
-# IDE 和编辑器
-# ====================
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.trae/
-
-# ====================
-# Python
-# ====================
+```gitignore
+# Compiled and binary files
+*.pyc
 __pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-build/
-dist/
 
-# ====================
-# 虚拟环境
-# ====================
+# Dependencies
+.venv/
 venv/
-env/
-env2/
-pythonvenv/
+node_modules/
 
-# ====================
-# 备份文件
-# ====================
-*.bak
-*.backup
-*.old
-
-# ====================
-# 项目生成文件
-# ====================
-scripts.json
-output/
-.image_generation_status.json
-test_output/
-ultimate_diversity_test/
-
-# ====================
-# 日志文件
-# ====================
+# Logs and temp files
 *.log
-
-# ====================
-# 二进制文件
-# ====================
-*.mp4
-*.mp3
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.webp
-
-# ====================
-# 临时文件
-# ====================
 *.tmp
-*.temp
+*.swp
 
-# ====================
-# FFmpeg
-# ====================
-ffmpeg/
-
-# ====================
-# 环境变量
-# ====================
+# Environment
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
+*.env.*
 
-# ====================
-# 文档生成
-# ====================
-*.html
-*.pdf
+# Editors
+.vscode/
+.idea/
 
-# ====================
-# 压缩文件
-# ====================
+# Build artifacts
+dist/
+build/
+target/
+*.class
+*.o
+*.obj
+*.out
+*.exe
+*.dll
+*.so
+*.a
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Testing and coverage
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Compressed files
 *.zip
-*.tar.gz
-*.rar
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
 *.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```
