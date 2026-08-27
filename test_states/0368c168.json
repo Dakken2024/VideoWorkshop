@@ -1,0 +1,25 @@
+{
+  "task_id": "0368c168",
+  "name": "Test Video",
+  "status": "pending",
+  "created_at": 1787833805.1560507,
+  "updated_at": 1787833805.1560507,
+  "started_at": null,
+  "completed_at": null,
+  "params": {
+    "param": "value"
+  },
+  "current_stage": "script_generation",
+  "progress": {
+    "stage": "script_generation",
+    "current_step": 0,
+    "total_steps": 1,
+    "percentage": 0.0,
+    "message": "Waiting to start",
+    "details": {}
+  },
+  "checkpoints": [],
+  "error_message": "",
+  "retry_count": 0,
+  "max_retries": 3
+}
