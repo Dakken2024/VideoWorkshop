@@ -1,0 +1,14 @@
+{
+  "TestChar": {
+    "name": "TestChar",
+    "description": "A brave hero",
+    "appearance": "tall with blue eyes",
+    "clothing": "armor",
+    "style_keywords": [
+      "fantasy",
+      "epic"
+    ],
+    "reference_images": [],
+    "seed": 123
+  }
+}
