@@ -1,4 +1,4 @@
-```gitignore
+```
 # Python
 __pycache__/
 *.pyc
@@ -9,34 +9,13 @@ __pycache__/
 .venv/
 venv/
 env/
+Lib/site-packages/
+
+# Logs
+*.log
+
+# Environment
 .env
 .env.local
 .env.*
-
-# Logs and temp files
-*.log
-*.tmp
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Build and distribution
-dist/
-build/
-*.egg-info/
-
-# Testing and coverage
-.coverage
-htmlcov/
-.coverage.*
-.cache
-.pytest_cache/
-.mypy_cache/
-
-# OS generated files
-.DS_Store
-Thumbs.db
 ```
