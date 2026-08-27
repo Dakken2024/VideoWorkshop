@@ -96,35 +96,107 @@ class AudioConfig:
 # ==================== 图片生成配置 ====================
 
 @dataclass
+class CanvasPreset:
+    """画布预设"""
+    name: str
+    width: int
+    height: int
+    aspect_ratio: str  # "9:16", "16:9", "1:1", "4:3", "3:2"
+
+
+@dataclass
 class ImageConfig:
     """图片生成配置"""
-    width: int = 1080
-    height: int = 1920
+    # 画布配置（支持多比例）
+    canvas_presets: Dict[str, CanvasPreset] = field(default_factory=lambda: {
+        "vertical_9_16": CanvasPreset("竖屏 9:16", 1080, 1920, "9:16"),
+        "horizontal_16_9": CanvasPreset("横屏 16:9", 1920, 1080, "16:9"),
+        "square_1_1": CanvasPreset("正方形 1:1", 1080, 1080, "1:1"),
+        "landscape_4_3": CanvasPreset("横屏 4:3", 1600, 1200, "4:3"),
+        "photo_3_2": CanvasPreset("照片 3:2", 1500, 1000, "3:2"),
+    })
+    active_preset: str = "vertical_9_16"  # 当前使用的预设
+    
+    # 自定义尺寸（当 preset 为 custom 时使用）
+    custom_width: int = 1080
+    custom_height: int = 1920
+    
+    # API 配置
     api_timeout: int = 60
     min_interval: float = 3.0
     max_interval: float = 15.0
     max_retries: int = 3
     api_key: str = os.environ.get("POLLINATIONS_API_KEY", "")
 
+    @property
+    def width(self) -> int:
+        """获取当前画布宽度"""
+        if self.active_preset == "custom":
+            return self.custom_width
+        preset = self.canvas_presets.get(self.active_preset)
+        return preset.width if preset else 1080
+
+    @property
+    def height(self) -> int:
+        """获取当前画布高度"""
+        if self.active_preset == "custom":
+            return self.custom_height
+        preset = self.canvas_presets.get(self.active_preset)
+        return preset.height if preset else 1920
+
+    @property
+    def aspect_ratio(self) -> str:
+        """获取当前宽高比"""
+        if self.active_preset == "custom":
+            return "custom"
+        preset = self.canvas_presets.get(self.active_preset)
+        return preset.aspect_ratio if preset else "9:16"
+
 
 # ==================== AI 大模型配置 ====================
+
+@dataclass
+class LLMProvider:
+    """LLM 服务商配置"""
+    name: str = "DeepSeek"
+    enabled: bool = True
+    api_key: str = ""
+    base_url: str = "https://api.deepseek.com"
+    model: str = "deepseek-v4-flash"
+    temperature: float = 0.7
+    max_tokens: int = 4096
+
 
 @dataclass
 class AIConfig:
     """AI 大模型配置"""
     enabled: bool = False
-    provider: str = "deepseek"
-    api_key: str = os.environ.get("AI_API_KEY", "")
-    base_url: str = "https://api.deepseek.com"
-    model: str = "deepseek-v4-flash"
-    temperature: float = 0.7
-    max_tokens: int = 4096
+    # 默认使用 DeepSeek
+    default_provider: str = "deepseek"
+    providers: Dict[str, LLMProvider] = field(default_factory=lambda: {
+        "deepseek": LLMProvider(
+            name="DeepSeek",
+            enabled=True,
+            api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+        ),
+        "openrouter": LLMProvider(
+            name="OpenRouter",
+            enabled=False,
+            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            base_url="https://openrouter.ai/api/v1",
+            model="deepseek/deepseek-chat-v4-flash",
+        ),
+    })
     # 模块级开关
     modules: Dict[str, bool] = field(default_factory=lambda: {
         "content_generation": False,
         "script_generation": False,
         "prompt_enhancement": False,
     })
+    # Prompt 优化风格
+    prompt_style: str = "default"  # default, cinematic, anime, realistic, artistic
 
 
 # ==================== 搜索服务配置 ====================

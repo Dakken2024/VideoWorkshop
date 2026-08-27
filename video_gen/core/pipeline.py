@@ -40,7 +40,10 @@ class GenerationPipeline:
     async def run(self, title: str, script_data: Dict,
                   output_dir: str = None,
                   progress_callback: Optional[Callable] = None,
-                  scene_callback: Optional[Callable] = None) -> Dict:
+                  scene_callback: Optional[Callable] = None,
+                  canvas_preset: str = None,
+                  custom_width: int = None,
+                  custom_height: int = None) -> Dict:
         """
         执行完整生成流水线
 
@@ -50,6 +53,9 @@ class GenerationPipeline:
             output_dir: 输出目录
             progress_callback: 进度回调 (step_name, current, total, message)
             scene_callback: 场景进度回调 (scene_index, total, message)
+            canvas_preset: 画布预设名称（可选，覆盖配置）
+            custom_width: 自定义宽度（可选）
+            custom_height: 自定义高度（可选）
 
         Returns:
             生成结果字典
@@ -59,6 +65,19 @@ class GenerationPipeline:
 
         project_dir = get_output_dir(title, output_dir)
         ensure_dir(project_dir)
+        
+        # 应用画布设置
+        if canvas_preset:
+            self.config.image.active_preset = canvas_preset
+        if custom_width:
+            self.config.image.custom_width = custom_width
+        if custom_height:
+            self.config.image.custom_height = custom_height
+            
+        # 获取当前画布尺寸
+        img_width = self.config.image.width
+        img_height = self.config.image.height
+        logger.info(f"使用画布尺寸：{img_width}x{img_height} ({self.config.image.aspect_ratio})")
 
         scenes = script_data.get('scenes', [])
         meta = script_data.get('meta', {})
@@ -66,6 +85,8 @@ class GenerationPipeline:
             'title': title,
             'output_dir': project_dir,
             'scenes': len(scenes),
+            'canvas_size': f"{img_width}x{img_height}",
+            'aspect_ratio': self.config.image.aspect_ratio,
             'audio_file': None,
             'image_files': [],
             'video_file': None,
