@@ -1,3 +1,42 @@
-# Examples 1:
+```gitignore
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Example 2 (Project with artifacts):
+# Dependencies
+.venv/
+venv/
+env/
+.env
+.env.local
+.env.*
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build and distribution
+dist/
+build/
+*.egg-info/
+
+# Testing and coverage
+.coverage
+htmlcov/
+.coverage.*
+.cache
+.pytest_cache/
+.mypy_cache/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```
