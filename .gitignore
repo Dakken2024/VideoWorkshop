@@ -1,4 +1,4 @@
-```
+```gitignore
 # Python
 __pycache__/
 *.pyc
@@ -8,6 +8,9 @@ __pycache__/
 env/
 venv/
 .venv/
+.ENV
+.ENV.*
+.venv.bak/
 pip-log.txt
 pip-delete-this-directory.txt
 .tox/
@@ -18,45 +21,104 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
-*.tmp
-*.swp
-*~
-.DS_Store
-Thumbs.db
-
-# Dependencies
-node_modules/
-julia-*/
-zig*/
-
-# Build artifacts
-dist/
-build/
-target/
-
-# Testing
-.coverage
-htmlcov/
-.nyc_output
-coverage/
+*.pot
+*.pyc
+*.pyo
+*.pyd
+.MF
 .pytest_cache/
 .mypy_cache/
+
+# General
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+.directory
+.Trashes
+*.nib
+*~
+*.swp
+*.swo
+*#
+.\#*
+.~lock.*
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.VolumeIcon.icns
+com.apple.timemachine.donotpresent
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*.swo
+*~
 
 # Environment variables
 .env
 .env.local
 .env.*
+!.env.example
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+*.tmproj
+nbproject/
+*.iml
+*.ipr
+*.iws
+*.sw?
 
-# Gradle
-.gradle/
+# Build and distribution
+dist/
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# General temp/log files
-*.tmp
-*.log
+# Testing
+.tests/
+.pytest_cache/
+.hypothesis/
+.coverage*
+
+# Documentation
+docs/_build/
+
+# Virtual environments
+venv/
+env/
+venv/
+.venv/
+env.bak/
+venv.bak/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 ```
